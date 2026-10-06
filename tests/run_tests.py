@@ -31,6 +31,7 @@ def _load_core() -> None:
 
 _load_core()
 
+from autorenew_core.library import library_candidates, parse_seasoninfo  # noqa: E402
 from autorenew_core.models import (  # noqa: E402
     SOURCE_LIBRARY,
     SOURCE_MANUAL,
@@ -323,6 +324,90 @@ def test_store_survives_corrupt_payload():
     # 坏数据之后还能正常写入
     store.upsert(TrackedShow(tmdbid=9, title="恢复"))
     assert [s.tmdbid for s in store.list_all()] == [9]
+
+
+# --------------------------------------------------------------------------
+# library —— 宿主 mediaserveritem 的真实取值（实测：item_type 是中文，
+# seasoninfo 是 JSON 字符串）—— 这两个坑踩过，测试钉死
+# --------------------------------------------------------------------------
+
+@case
+def test_parse_seasoninfo_handles_json_string():
+    assert parse_seasoninfo('{"1": [1, 2, 3], "2": [1, 2]}') == {1: 3, 2: 2}
+
+
+@case
+def test_parse_seasoninfo_tolerates_dict_and_junk():
+    assert parse_seasoninfo({"3": [1, 2]}) == {3: 2}
+    assert parse_seasoninfo(None) == {}
+    assert parse_seasoninfo("") == {}
+    assert parse_seasoninfo("not json") == {}
+    assert parse_seasoninfo("{}") == {}
+    assert parse_seasoninfo([1, 2]) == {}
+    assert parse_seasoninfo('{"0": [1], "1": [1, 2]}') == {1: 2}  # S0 排除
+    assert parse_seasoninfo('{"x": [1], "2": [1]}') == {2: 1}  # 非数字季号跳过
+    assert parse_seasoninfo({"2": "not-a-list"}) == {2: 0}
+
+
+@case
+def test_library_candidates_filters_by_chinese_item_type():
+    rows = [
+        {"item_type": "电影", "title": "某电影", "media_id": "1", "seasoninfo": "{}"},
+        {
+            "item_type": "电视剧",
+            "title": "赛博朋克：边缘行者",
+            "media_id": "105248",
+            "year": "2022",
+            "seasoninfo": '{"1": [1, 2, 3]}',
+        },
+    ]
+    got = library_candidates(rows)
+    assert [c["tmdbid"] for c in got] == [105248], got
+    assert got[0]["title"] == "赛博朋克：边缘行者"
+    assert got[0]["season"] == 1
+
+
+@case
+def test_library_candidates_picks_highest_season():
+    rows = [
+        {
+            "item_type": "电视剧",
+            "title": "为了全人类",
+            "media_id": "87917",
+            "seasoninfo": '{"1": [1], "3": [1, 2, 3]}',
+        }
+    ]
+    assert library_candidates(rows)[0]["season"] == 3
+
+
+@case
+def test_library_candidates_defaults_to_season_one_without_seasoninfo():
+    rows = [{"item_type": "电视剧", "title": "X", "media_id": "9", "seasoninfo": "{}"}]
+    assert library_candidates(rows)[0]["season"] == 1
+
+
+@case
+def test_library_candidates_skips_unusable_rows():
+    rows = [
+        {"item_type": "电视剧", "title": None, "media_id": "9", "seasoninfo": "{}"},
+        {"item_type": "电视剧", "title": "X", "media_id": None, "seasoninfo": "{}"},
+        {"item_type": "电视剧", "title": "X", "media_id": "abc", "seasoninfo": "{}"},
+        {"item_type": "", "title": "X", "media_id": "9", "seasoninfo": "{}"},
+    ]
+    assert library_candidates(rows) == []
+
+
+@case
+def test_library_candidates_accepts_attribute_objects():
+    """in-process ORM 给的是对象，不是 dict。"""
+
+    class Row:
+        def __init__(self, **kw):
+            self.__dict__.update(kw)
+
+    rows = [Row(item_type="电视剧", title="Y", media_id="7", seasoninfo='{"2": [1, 2]}')]
+    got = library_candidates(rows)
+    assert got[0]["tmdbid"] == 7 and got[0]["season"] == 2
 
 
 # --------------------------------------------------------------------------

@@ -25,11 +25,13 @@ from app.sdk.logging import logger
 from app.sdk.plugin import _PluginBase
 
 from .api import build_api_routes
+from .core.library import library_candidates, parse_seasoninfo
 from .core.models import (
     SOURCE_LABELS,
     SOURCE_LIBRARY,
     SOURCE_MANUAL,
     SOURCE_SUBSCRIBE,
+    MEDIA_TYPE_TV,
     TrackedShow,
     badge_for,
     is_terminal,
@@ -51,7 +53,7 @@ class AutoRenew(_PluginBase):
     plugin_name = "自动续订"
     plugin_desc = "长期追踪电视剧：TMDB 上出现新一季就自动建订阅。提供 Sonarr 式状态标签、季进度与播出日历。"
     plugin_icon = "AutoRenew.png"
-    plugin_version = "1.0.0"
+    plugin_version = "1.0.1"
     plugin_author = "FlameSky-S"
     author_url = "https://github.com/FlameSky-S"
     plugin_config_prefix = "autorenew_"
@@ -336,12 +338,7 @@ class AutoRenew(_PluginBase):
         actions = 0
 
         for show in shows:
-            snapshot = self._tmdb.snapshot(show.tmdbid)
-            seasons = snapshot.get("seasons") or []
-            show.tmdb_status = snapshot.get("status")
-            show.next_episode_air_date = snapshot.get("next_episode_air_date")
-            show.poster_path = snapshot.get("poster_path") or show.poster_path
-            show.last_checked_at = _now()
+            show, seasons = self.__refresh_show(show)
 
             if is_terminal(show.tmdb_status) and not any(
                 int(s.get("season_number") or 0) > show.season for s in seasons
@@ -446,35 +443,46 @@ class AutoRenew(_PluginBase):
         self.__post("【自动续订】本轮续订汇总", "\n".join(lines))
 
     # ------------------------------------------------------- 媒体库 / TMDB
-    def __library_seasons(self, tmdbid: int) -> Dict[int, Dict[str, Any]]:
-        """从宿主 `mediaserveritem` 读某剧各季的入库情况（in-process ORM）。"""
-        out: Dict[int, Dict[str, Any]] = {}
+    def __library_seasons(self, tmdbid: int) -> Dict[int, int]:
+        """从宿主 `mediaserveritem` 读某剧各季的入库集数（in-process ORM）。
+
+        ⚠️ 该表真实取值：`item_type` 是**中文**「电视剧」，`seasoninfo` 是
+        **JSON 字符串**而不是 dict —— 解析逻辑集中在 `core/library.py`。
+        """
         try:
             with SessionFactory() as db:
                 items = MediaServerItem.list(db)
         except Exception as err:  # noqa: BLE001
             logger.error(f"自动续订：读取媒体库失败：{err}")
-            return out
+            return {}
 
         target = str(tmdbid)
         for item in items:
+            if str(getattr(item, "item_type", "") or "").strip() != MEDIA_TYPE_TV:
+                continue
             if str(getattr(item, "media_id", "") or "") != target:
                 continue
-            seasoninfo = getattr(item, "seasoninfo", None) or {}
-            if not isinstance(seasoninfo, dict):
-                continue
-            for key, value in seasoninfo.items():
-                try:
-                    season_no = int(key)
-                except (TypeError, ValueError):
-                    continue
-                if season_no <= 0:
-                    continue
-                episode_count = len(value) if isinstance(value, (dict, list, set)) else 0
-                entry = out.setdefault(season_no, {"episodes": 0, "items": 0})
-                entry["episodes"] = max(entry["episodes"], episode_count)
-                entry["items"] += 1
-        return out
+            return parse_seasoninfo(getattr(item, "seasoninfo", None))
+        return {}
+
+    def __refresh_show(self, show: TrackedShow) -> Tuple[TrackedShow, List[Dict[str, Any]]]:
+        """拉一次 TMDB，把元数据写回追踪记录，并返回季列表。
+
+        列表接口因此可以**纯本地渲染**：不这样做的话 `/shows` 会变成
+        「每部剧一次 TMDB 调用」（实测 38 部 ≈ 10.7s，页面加载不可接受）。
+        """
+        if not self._tmdb:
+            return show, []
+        snapshot = self._tmdb.snapshot(show.tmdbid)
+        seasons = snapshot.get("seasons") or []
+        show.tmdb_status = snapshot.get("status")
+        show.next_episode_air_date = snapshot.get("next_episode_air_date")
+        show.poster_path = snapshot.get("poster_path") or show.poster_path
+        latest = latest_season(seasons)
+        show.latest_season = (latest or {}).get("season_number")
+        show.latest_season_episodes = (latest or {}).get("episode_count")
+        show.last_checked_at = _now()
+        return show, seasons
 
     def __poster_url(self, poster_path: Optional[str]) -> Optional[str]:
         if not poster_path:
@@ -485,21 +493,17 @@ class AutoRenew(_PluginBase):
             return None
 
     def __decorate(self, show: TrackedShow) -> Dict[str, Any]:
+        """纯本地组装视图字段 —— **不调 TMDB**，元数据由导入 / 检测时写入。"""
         payload = show.to_dict()
         payload["status_label"] = status_label(show.tmdb_status)
         payload["source_label"] = SOURCE_LABELS.get(show.source, show.source)
         payload["poster_url"] = self.__poster_url(show.poster_path)
         payload["terminated"] = is_terminal(show.tmdb_status)
-        latest = None
-        if self._tmdb:
-            latest = latest_season(self._tmdb.seasons(show.tmdbid))
-        payload["latest_season"] = (latest or {}).get("season_number")
-        payload["latest_season_episodes"] = (latest or {}).get("episode_count")
         payload["badge"] = badge_for(
             tmdb_status=show.tmdb_status,
             tracked_season=show.season,
-            latest_season=(latest or {}).get("season_number"),
-            latest_season_episodes=(latest or {}).get("episode_count"),
+            latest_season=show.latest_season,
+            latest_season_episodes=show.latest_season_episodes,
             auto_renew=show.auto_renew,
         )
         return payload
@@ -551,15 +555,17 @@ class AutoRenew(_PluginBase):
         if existing:
             return {"success": False, "message": f"「{existing.title}」已在追踪名单中"}
         self._store.upsert(
-            TrackedShow(
-                tmdbid=int(tmdbid),
-                title=str(title),
-                year=payload.get("year"),
-                season=season_no,
-                source=SOURCE_MANUAL,
-                poster_path=payload.get("poster_path"),
-                added_at=_now(),
-            )
+            self.__refresh_show(
+                TrackedShow(
+                    tmdbid=int(tmdbid),
+                    title=str(title),
+                    year=payload.get("year"),
+                    season=season_no,
+                    source=SOURCE_MANUAL,
+                    poster_path=payload.get("poster_path"),
+                    added_at=_now(),
+                )
+            )[0]
         )
         logger.info(f"自动续订：手动加入追踪「{title}」第 {season_no} 季")
         return {"success": True, "message": f"已加入追踪：{title}"}
@@ -601,7 +607,7 @@ class AutoRenew(_PluginBase):
                 continue
             if number <= 0:
                 continue
-            in_library = library.get(number, {}).get("episodes", 0)
+            in_library = library.get(number, 0)
             seasons.append(
                 {
                     "season_number": number,
@@ -653,64 +659,46 @@ class AutoRenew(_PluginBase):
     def api_import_library(self, payload: dict = None) -> Dict[str, Any]:
         """冷启动用：把媒体库里的剧集批量纳入追踪，**不建任何订阅**。"""
         payload = payload or {}
-        only_new = bool(payload.get("only_new", True))
         try:
             with SessionFactory() as db:
-                items = MediaServerItem.list(db)
+                rows = MediaServerItem.list(db)
         except Exception as err:  # noqa: BLE001
             return {"success": False, "message": f"读取媒体库失败：{err}"}
 
+        candidates = library_candidates(rows)
         added, skipped = 0, 0
-        for item in items:
-            if str(getattr(item, "item_type", "") or "").lower() not in {"tv", "series", ""}:
-                continue
-            media_id = getattr(item, "media_id", None)
-            title = getattr(item, "title", None)
-            if not media_id or not title:
-                continue
-            try:
-                tmdbid = int(media_id)
-            except (TypeError, ValueError):
-                continue
-
-            seasoninfo = getattr(item, "seasoninfo", None) or {}
-            seasons = []
-            if isinstance(seasoninfo, dict):
-                for key in seasoninfo:
-                    try:
-                        num = int(key)
-                    except (TypeError, ValueError):
-                        continue
-                    if num > 0:
-                        seasons.append(num)
-            highest = max(seasons) if seasons else 1
-
+        for candidate in candidates:
+            tmdbid = candidate["tmdbid"]
             existing = self._store.get(tmdbid)
             if existing:
-                if highest > existing.season:
-                    self._store.set_season(tmdbid, highest)
+                if candidate["season"] > existing.season:
+                    self._store.set_season(tmdbid, candidate["season"])
                     added += 1
                 else:
                     skipped += 1
                 continue
-            if only_new is False or existing is None:
-                self._store.upsert(
+            self._store.upsert(
+                self.__refresh_show(
                     TrackedShow(
                         tmdbid=tmdbid,
-                        title=str(title),
-                        year=getattr(item, "year", None),
-                        season=highest,
+                        title=candidate["title"],
+                        year=candidate["year"],
+                        season=candidate["season"],
                         source=SOURCE_LIBRARY,
                         added_at=_now(),
                     )
-                )
-                added += 1
+                )[0]
+            )
+            added += 1
 
-        logger.info(f"自动续订：媒体库导入完成，新增/升级 {added} 部，跳过 {skipped} 部")
+        logger.info(
+            f"自动续订：媒体库导入完成（库内剧集 {len(candidates)} 部），新增/升级 {added} 部，跳过 {skipped} 部"
+        )
         return {
             "success": True,
             "added": added,
             "skipped": skipped,
+            "candidates": len(candidates),
             "message": f"导入完成：新增 {added} 部，跳过 {skipped} 部（未创建任何订阅）",
         }
 

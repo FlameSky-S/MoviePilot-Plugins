@@ -60,6 +60,8 @@ class TrackedShow:
     auto_renew: bool = True
     tmdb_status: Optional[str] = None
     poster_path: Optional[str] = None
+    latest_season: Optional[int] = None
+    latest_season_episodes: Optional[int] = None
     next_episode_air_date: Optional[str] = None
     last_checked_at: Optional[str] = None
     added_at: Optional[str] = None
