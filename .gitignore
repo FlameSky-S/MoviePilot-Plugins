@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+build/
+dist/
+!plugins.v3/*/dist/
+!plugins.v3/*/dist/**
+*.zip
+release_zips/
+*.egg-info/
+.installed.cfg
+.eggs/
+
+# MoviePilot V3 ships selected Python 3.14 wheels with the plugin package.
+!plugins.v3/*/wheels/
+!plugins.v3/*/wheels/**
+
+# Tests / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environments
+.env
+.venv/
+venv/
+env/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+AGENTS.md
+
+# Node — frontend deps are never committed, dist IS (see the carve-out above)
+node_modules/
+plugins.v3/*/pnpm-lock.yaml
+plugins.v3/*/pnpm-workspace.yaml

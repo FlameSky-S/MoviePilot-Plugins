@@ -1,0 +1,2 @@
+# 自动续订（AutoRenew）不需要额外的第三方依赖：
+# 纯逻辑用标准库，宿主能力走 app.sdk.* 与 app.modules.themoviedb.tmdbapi。

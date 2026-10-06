@@ -1,0 +1,11 @@
+
+.autorenew-app[data-v-50145025] {
+  position: relative;
+  min-height: 100%;
+}
+.autorenew-fab[data-v-50145025] {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 5;
+}

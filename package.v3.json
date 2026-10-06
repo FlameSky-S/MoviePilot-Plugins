@@ -1,0 +1,17 @@
+{
+  "AutoRenew": {
+    "name": "自动续订",
+    "description": "长期追踪电视剧：把媒体库/订阅里的剧集纳入名单，按 TMDB 季信息发现新一季并自动建订阅；提供 Sonarr 式的状态标签、季进度与播出日历。",
+    "labels": "订阅,追剧,电视剧,TMDB",
+    "version": "1.0.0",
+    "icon": "https://raw.githubusercontent.com/FlameSky-S/MoviePilot-Plugins/main/icons/AutoRenew.png",
+    "author": "FlameSky-S",
+    "author_url": "https://github.com/FlameSky-S",
+    "level": 2,
+    "system_version": ">=3.0.0,<4",
+    "release": true,
+    "history": {
+      "v1.0.0": "首个版本：侧边菜单「自动续订」入口、追踪名单、TMDB 新季检测与自动建订阅、Sonarr 式状态标签、季进度弹窗、播出日历。"
+    }
+  }
+}
