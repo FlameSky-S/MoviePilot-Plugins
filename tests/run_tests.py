@@ -31,7 +31,7 @@ def _load_core() -> None:
 
 _load_core()
 
-from autorenew_core.library import library_candidates, parse_seasoninfo  # noqa: E402
+from autorenew_core.library import diff_watchlist, library_candidates, parse_seasoninfo  # noqa: E402
 from autorenew_core.models import (  # noqa: E402
     SOURCE_LIBRARY,
     SOURCE_MANUAL,
@@ -408,6 +408,75 @@ def test_library_candidates_accepts_attribute_objects():
     rows = [Row(item_type="电视剧", title="Y", media_id="7", seasoninfo='{"2": [1, 2]}')]
     got = library_candidates(rows)
     assert got[0]["tmdbid"] == 7 and got[0]["season"] == 2
+
+
+# --------------------------------------------------------------------------
+# library diff —— 「从媒体库导入」确认弹窗的比对 seam（纯函数）
+#
+# 语义（老板已确认）：
+#   added   = 库里有、名单里没有          -> 建议新增
+#   kept    = 库里也有、名单里也有        -> 不动
+#   removed = 名单里 source=媒体库导入，但现在库里已经没有 -> 建议移除
+#   名单里 source≠媒体库导入 且库里没有   -> 三条列表都不进（继续追踪，不动）
+# --------------------------------------------------------------------------
+
+def _lib(tmdbid, title, season=1):
+    return {"tmdbid": tmdbid, "title": title, "year": None, "season": season, "seasons": {}}
+
+
+@case
+def test_diff_marks_library_only_shows_as_added():
+    got = diff_watchlist([], [_lib(1, "新剧")])
+    assert [c["tmdbid"] for c in got["added"]] == [1], got
+    assert got["removed"] == [] and got["kept"] == []
+
+
+@case
+def test_diff_marks_intersection_as_kept():
+    tracked = [TrackedShow(tmdbid=1, title="旧剧", source=SOURCE_LIBRARY)]
+    got = diff_watchlist(tracked, [_lib(1, "旧剧")])
+    assert got["added"] == [] and got["removed"] == [], got
+    assert [s["tmdbid"] for s in got["kept"]] == [1], got
+
+
+@case
+def test_diff_removes_only_library_sourced_shows_missing_from_library():
+    tracked = [
+        TrackedShow(tmdbid=1, title="库导入了但库里没了", source=SOURCE_LIBRARY),
+        TrackedShow(tmdbid=2, title="手动加的，库里没有也留着", source=SOURCE_MANUAL),
+        TrackedShow(tmdbid=3, title="订阅同步的，库里没有也留着", source=SOURCE_SUBSCRIBE),
+    ]
+    got = diff_watchlist(tracked, [])
+    assert [s["tmdbid"] for s in got["removed"]] == [1], got
+    assert got["kept"] == [] and got["added"] == [], got
+    # 手动/订阅来源的绝不许出现在任何一组里（否则会被误删）
+    seen = {s["tmdbid"] for key in ("added", "removed", "kept") for s in got[key]}
+    assert seen == {1}, seen
+
+
+@case
+def test_diff_matches_ids_across_str_and_int():
+    tracked = [TrackedShow(tmdbid=105248, title="赛博朋克", source=SOURCE_LIBRARY)]
+    got = diff_watchlist(tracked, [{"tmdbid": "105248", "title": "赛博朋克", "season": 1}])
+    assert got["kept"] and not got["added"] and not got["removed"], got
+
+
+@case
+def test_diff_is_empty_for_empty_inputs():
+    assert diff_watchlist([], []) == {"added": [], "removed": [], "kept": []}
+    assert diff_watchlist(None, None) == {"added": [], "removed": [], "kept": []}
+
+
+@case
+def test_diff_added_payload_carries_title_and_season():
+    got = diff_watchlist([], [_lib(7, "某剧", season=3)])
+    assert got["added"][0]["title"] == "某剧" and got["added"][0]["season"] == 3
+
+
+@case
+def test_diff_handles_duplicate_candidates_without_double_counting():
+    got = diff_watchlist([], [_lib(1, "重复"), _lib(1, "重复")])
+    assert [c["tmdbid"] for c in got["added"]] == [1], got
 
 
 # --------------------------------------------------------------------------

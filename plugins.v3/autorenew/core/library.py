@@ -18,9 +18,9 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Iterable, List, Mapping
+from typing import Any, Dict, Iterable, List, Mapping, Optional
 
-from .models import MEDIA_TYPE_TV
+from .models import MEDIA_TYPE_TV, SOURCE_LIBRARY
 
 
 def _get(row: Any, key: str, default: Any = None) -> Any:
@@ -95,3 +95,70 @@ def library_candidates(
             }
         )
     return out
+
+
+def _as_dict(row: Any) -> Dict[str, Any]:
+    """dict 行 / dataclass 行 / 普通对象行 —— 统一成 dict 好过 JSON。"""
+    if isinstance(row, Mapping):
+        return dict(row)
+    to_dict = getattr(row, "to_dict", None)
+    if callable(to_dict):
+        return dict(to_dict())
+    return dict(getattr(row, "__dict__", {}) or {})
+
+
+def _tmdbid_of(row: Any) -> Optional[int]:
+    """两侧的 tmdbid 都归一到 int（库侧是字符串，名单侧是 int）。"""
+    value = _get(row, "tmdbid")
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def diff_watchlist(
+    tracked: Iterable[Any], candidates: Iterable[Any]
+) -> Dict[str, List[Dict[str, Any]]]:
+    """比对「追踪名单」与「库内候选」，产出导入确认弹窗的三组结果。
+
+    返回 `{"added": [...], "removed": [...], "kept": [...]}`：
+
+    - `added`   —— 库里有、名单里没有 → 建议新增（透出库侧候选）
+    - `kept`    —— 库里也有、名单里也有 → 不动（透出名单条目）
+    - `removed` —— 名单里 `source=媒体库导入`、但现在库里已经没有 → 建议移除
+
+    ⚠️ **名单里 `source≠媒体库导入`（手动添加 / 订阅同步）且库里没有的条目，
+    三条列表都不进**，继续照常追踪。这是安全边界：剧在名单里 ≠ 它必须存在于
+    媒体库；从库里删掉不等于放弃追踪。库里同一部剧出现多行（多库 / 多服务器）
+    只算一次。
+    """
+    added: List[Dict[str, Any]] = []
+    removed: List[Dict[str, Any]] = []
+    kept: List[Dict[str, Any]] = []
+
+    by_id: Dict[int, Dict[str, Any]] = {}
+    for cand in candidates or []:
+        cid = _tmdbid_of(cand)
+        if cid is None or cid in by_id:
+            continue
+        by_id[cid] = _as_dict(cand)
+
+    tracked_ids: set = set()
+    for show in tracked or []:
+        sid = _tmdbid_of(show)
+        if sid is None:
+            continue
+        tracked_ids.add(sid)
+        payload = _as_dict(show)
+        if sid in by_id:
+            kept.append(payload)
+        elif payload.get("source") == SOURCE_LIBRARY:
+            removed.append(payload)
+
+    for cid, payload in by_id.items():
+        if cid not in tracked_ids:
+            added.append(payload)
+
+    return {"added": added, "removed": removed, "kept": kept}

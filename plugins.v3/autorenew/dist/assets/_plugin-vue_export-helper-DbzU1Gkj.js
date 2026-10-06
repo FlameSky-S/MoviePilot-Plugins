@@ -33,6 +33,10 @@ function resolvePluginBase(pluginBase) {
 function createAutoRenewApi(api, pluginBase) {
   const get = endpoint => api.get(`${resolvePluginBase(pluginBase)}${endpoint}`);
   const post = (endpoint, payload) => api.post(`${resolvePluginBase(pluginBase)}${endpoint}`, payload);
+  const query = params => {
+    const search = new URLSearchParams(params || {}).toString();
+    return search ? `?${search}` : ''
+  };
 
   return {
     unwrapResponse,
@@ -57,12 +61,20 @@ function createAutoRenewApi(api, pluginBase) {
     search(params) {
       return get(`/search?${params.toString()}`)
     },
-    importLibrary(payload = {}) {
-      return post('/import_library', payload)
+    /** 导入前比对：返回 {added, removed, kept, library_total, last_sync}。 */
+    importPreview(params = {}) {
+      return get(`/import_preview${query(params)}`)
+    },
+    /** 按确认结果执行：{add: [tmdbid], remove: [tmdbid]}。 */
+    importApply(payload = {}) {
+      return post('/import_apply', payload)
+    },
+    /** 重新拉 TMDB 元数据：{scope: 'ended' | 'all'}。 */
+    refresh(payload = { scope: 'ended' }) {
+      return post('/refresh', payload)
     },
     calendar(params = {}) {
-      const query = new URLSearchParams(params).toString();
-      return get(query ? `/calendar?${query}` : '/calendar')
+      return get(`/calendar${query(params)}`)
     },
     check() {
       return post('/check', {})
@@ -70,4 +82,12 @@ function createAutoRenewApi(api, pluginBase) {
   }
 }
 
-export { createAutoRenewApi as c, errorMessage as e, formatDate as f, seasonLabel as s, unwrapResponse as u };
+const _export_sfc = (sfc, props) => {
+  const target = sfc.__vccOpts || sfc;
+  for (const [key, val] of props) {
+    target[key] = val;
+  }
+  return target;
+};
+
+export { _export_sfc as _, createAutoRenewApi as c, errorMessage as e, formatDate as f, seasonLabel as s, unwrapResponse as u };

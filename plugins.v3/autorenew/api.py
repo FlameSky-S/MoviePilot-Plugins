@@ -62,11 +62,25 @@ def build_api_routes(owner: Any) -> List[Dict[str, Any]]:
             "summary": "搜索 TMDB 剧集",
         },
         {
-            "path": "/import_library",
-            "endpoint": owner.api_import_library,
+            "path": "/import_preview",
+            "endpoint": owner.api_import_preview,
+            "methods": ["GET"],
+            "auth": "bear",
+            "summary": "媒体库导入前比对（将新增 / 将移除）",
+        },
+        {
+            "path": "/import_apply",
+            "endpoint": owner.api_import_apply,
             "methods": ["POST"],
             "auth": "bear",
-            "summary": "从媒体库导入剧集",
+            "summary": "按确认结果执行媒体库导入",
+        },
+        {
+            "path": "/refresh",
+            "endpoint": owner.api_refresh,
+            "methods": ["POST"],
+            "auth": "bear",
+            "summary": "重新拉取 TMDB 元数据（scope=ended|all）",
         },
         {
             "path": "/calendar",

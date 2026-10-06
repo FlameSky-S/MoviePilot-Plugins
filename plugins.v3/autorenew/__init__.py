@@ -25,7 +25,7 @@ from app.sdk.logging import logger
 from app.sdk.plugin import _PluginBase
 
 from .api import build_api_routes
-from .core.library import library_candidates, parse_seasoninfo
+from .core.library import diff_watchlist, library_candidates, parse_seasoninfo
 from .core.models import (
     SOURCE_LABELS,
     SOURCE_LIBRARY,
@@ -48,12 +48,25 @@ def _now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _as_int_list(raw: Any) -> List[int]:
+    """把前端传来的 id 列表归一成 int 列表，脏值丢弃（去重保序）。"""
+    out: List[int] = []
+    for value in raw or []:
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            continue
+        if number not in out:
+            out.append(number)
+    return out
+
+
 class AutoRenew(_PluginBase):
     # ---------------------------------------------------------------- 元数据
     plugin_name = "自动续订"
     plugin_desc = "长期追踪电视剧：TMDB 上出现新一季就自动建订阅。提供 Sonarr 式状态标签、季进度与播出日历。"
     plugin_icon = "AutoRenew.png"
-    plugin_version = "1.0.1"
+    plugin_version = "1.0.2"
     plugin_author = "FlameSky-S"
     author_url = "https://github.com/FlameSky-S"
     plugin_config_prefix = "autorenew_"
@@ -656,24 +669,91 @@ class AutoRenew(_PluginBase):
             )
         return out
 
-    def api_import_library(self, payload: dict = None) -> Dict[str, Any]:
-        """冷启动用：把媒体库里的剧集批量纳入追踪，**不建任何订阅**。"""
-        payload = payload or {}
+    # -------------------------------------------- 媒体库导入（先预览，再执行）
+    def __library_rows(self) -> Tuple[List[Any], str, str]:
+        """读宿主媒体库行。返回 (行, 错误, 最近同步时间)。"""
         try:
             with SessionFactory() as db:
                 rows = MediaServerItem.list(db)
         except Exception as err:  # noqa: BLE001
-            return {"success": False, "message": f"读取媒体库失败：{err}"}
+            logger.error(f"自动续订：读取媒体库失败：{err}")
+            return [], f"读取媒体库失败：{err}"
+        marks = [str(getattr(row, "lst_mod_date", "") or "") for row in rows]
+        return rows, "", max([m for m in marks if m] or [""])
+
+    def __sync_media_library(self) -> Tuple[bool, str]:
+        """强制跑一次宿主媒体库同步，让 `mediaserveritem` 立刻反映真实的库内容。
+
+        宿主只在调度器里按 `MEDIASERVER_SYNC_INTERVAL`（默认 6h）同步，**没有**任何
+        HTTP 接口能手动触发；但插件跑在宿主进程内，可以直接调 `MediaServerChain.sync`。
+        同步收尾会 `delete_stale` 清掉本轮没更新的行 —— 这正是「从库里删掉的剧能被
+        识别为建议移除」的前提。
+        """
+        try:
+            from app.chain.mediaserver import MediaServerChain
+
+            MediaServerChain().sync()
+        except Exception as err:  # noqa: BLE001
+            logger.error(f"自动续订：强制同步媒体库失败：{err}")
+            return False, f"媒体库同步失败：{err}"
+        logger.info("自动续订：已强制同步媒体库")
+        return True, "媒体库同步完成"
+
+    def api_import_preview(self, sync: bool = False) -> Dict[str, Any]:
+        """导入前的比对：算出「将新增 / 将移除」，交给用户逐条确认。"""
+        sync_note = ""
+        if sync:
+            ok, sync_note = self.__sync_media_library()
+            if not ok:
+                return {"success": False, "message": sync_note}
+
+        rows, error, last_sync = self.__library_rows()
+        if error:
+            return {"success": False, "message": error}
 
         candidates = library_candidates(rows)
-        added, skipped = 0, 0
-        for candidate in candidates:
-            tmdbid = candidate["tmdbid"]
+        tracked = self._store.list_all() if self._store else []
+        diff = diff_watchlist(tracked, candidates)
+        logger.info(
+            f"自动续订：导入预览 —— 库内 {len(candidates)} 部，将新增 {len(diff['added'])} 部，"
+            f"将移除 {len(diff['removed'])} 部，名单内已有 {len(diff['kept'])} 部"
+        )
+        return {
+            "success": True,
+            "library_total": len(candidates),
+            "kept": len(diff["kept"]),
+            "added": diff["added"],
+            "removed": diff["removed"],
+            "last_sync": last_sync,
+            "sync_note": sync_note,
+        }
+
+    def api_import_apply(self, payload: dict = None) -> Dict[str, Any]:
+        """按确认弹窗里勾选的结果执行。**不创建任何订阅。**
+
+        - 勾中的新增 → 纳入名单（来源 = 媒体库导入）
+        - 勾中的移除 → **只对来源 = 媒体库导入的条目生效**，其它来源一律拒绝
+        """
+        payload = payload or {}
+        add_ids = _as_int_list(payload.get("add"))
+        remove_ids = _as_int_list(payload.get("remove"))
+
+        rows, error, _ = self.__library_rows()
+        if error:
+            return {"success": False, "message": error}
+        by_id = {c["tmdbid"]: c for c in library_candidates(rows)}
+
+        added, upgraded, skipped = 0, 0, 0
+        for tmdbid in add_ids:
+            candidate = by_id.get(tmdbid)
+            if not candidate:
+                skipped += 1
+                continue
             existing = self._store.get(tmdbid)
             if existing:
                 if candidate["season"] > existing.season:
                     self._store.set_season(tmdbid, candidate["season"])
-                    added += 1
+                    upgraded += 1
                 else:
                     skipped += 1
                 continue
@@ -691,15 +771,64 @@ class AutoRenew(_PluginBase):
             )
             added += 1
 
+        removed, refused = 0, 0
+        for tmdbid in remove_ids:
+            show = self._store.get(tmdbid)
+            if not show:
+                continue
+            if show.source != SOURCE_LIBRARY:
+                # 安全边界：手动添加 / 订阅同步进来的绝不允许被导入流程删掉
+                refused += 1
+                logger.warning(f"自动续订：拒绝移除「{show.title}」（来源={show.source}）")
+                continue
+            if self._store.remove(tmdbid):
+                removed += 1
+
         logger.info(
-            f"自动续订：媒体库导入完成（库内剧集 {len(candidates)} 部），新增/升级 {added} 部，跳过 {skipped} 部"
+            f"自动续订：媒体库导入完成 —— 新增 {added} 部，升级季号 {upgraded} 部，"
+            f"跳过 {skipped} 部，移除 {removed} 部，拒绝移除 {refused} 部"
         )
         return {
             "success": True,
             "added": added,
+            "upgraded": upgraded,
             "skipped": skipped,
-            "candidates": len(candidates),
-            "message": f"导入完成：新增 {added} 部，跳过 {skipped} 部（未创建任何订阅）",
+            "removed": removed,
+            "refused": refused,
+            "message": (
+                f"导入完成：新增 {added} 部（升级 {upgraded} 部），移除 {removed} 部"
+                f"（未创建任何订阅）"
+            ),
+        }
+
+    def api_refresh(self, payload: dict = None) -> Dict[str, Any]:
+        """重新拉 TMDB 元数据并写回追踪记录。
+
+        `scope=ended`（默认）只刷已完结/已砍的，`scope=all` 刷全部。已完结区的刷新
+        按钮走这个：万一 TMDB 那边又续订了，状态标签与徽标要能跟着变。
+        """
+        payload = payload or {}
+        scope = str(payload.get("scope") or "ended").strip().lower()
+        shows = self._store.list_all() if self._store else []
+        targets = shows if scope == "all" else [s for s in shows if is_terminal(s.tmdb_status)]
+
+        refreshed, failed = 0, 0
+        for show in targets:
+            try:
+                updated, _ = self.__refresh_show(show)
+                self._store.upsert(updated)
+                refreshed += 1
+            except Exception as err:  # noqa: BLE001
+                failed += 1
+                logger.error(f"自动续订：刷新「{show.title}」失败：{err}")
+
+        logger.info(f"自动续订：刷新 TMDB 元数据 scope={scope} 成功 {refreshed} 部，失败 {failed} 部")
+        return {
+            "success": True,
+            "scope": scope,
+            "refreshed": refreshed,
+            "failed": failed,
+            "message": f"已刷新 {refreshed} 部的 TMDB 信息" + (f"，{failed} 部失败" if failed else ""),
         }
 
     def api_calendar(self, days: int = 30) -> Dict[str, Any]:

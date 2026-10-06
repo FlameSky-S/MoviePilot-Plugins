@@ -42,8 +42,20 @@ const calendarEvents = ref([])
 const detailOpen = ref(false)
 const detail = ref(null)
 
+// 「从媒体库导入」确认流程
+const importOpen = ref(false)
+const importPreview = ref(null)
+const importSync = ref(false)
+const importBusy = ref(false)
+const addSelected = ref([])
+const removeSelected = ref([])
+
+const refreshingEnded = ref(false)
+
 const activeShows = computed(() => shows.value.filter(show => !show.terminated))
 const endedShows = computed(() => shows.value.filter(show => show.terminated))
+/** 全局「仅提醒模式」时，单剧的续订开关没有任何作用 —— UI 要禁用而不是假装能点。 */
+const reminderOnly = computed(() => !!status.value && !status.value.auto_subscribe)
 
 async function load() {
   loading.value = true
@@ -68,11 +80,28 @@ async function changeSort() {
 
 async function toggleRenew(show) {
   try {
-    await pluginApi.value.toggleShow({ tmdbid: show.tmdbid, auto_renew: !show.auto_renew })
-    show.auto_renew = !show.auto_renew
-    show.badge = show.auto_renew ? show.badge : '已暂停续订'
+    const res = unwrapResponse(
+      await pluginApi.value.toggleShow({ tmdbid: show.tmdbid, auto_renew: !show.auto_renew }),
+    )
+    if (res?.auto_renew !== undefined) show.auto_renew = res.auto_renew
+    await load() // 徽标与排序会随开关变化，整体重载最稳
   } catch (err) {
     error.value = errorMessage(err)
+  }
+}
+
+/** 已完结区：重新拉 TMDB 元数据（万一那边又续订了，状态要能跟着变）。 */
+async function refreshEnded() {
+  refreshingEnded.value = true
+  error.value = ''
+  try {
+    const res = unwrapResponse(await pluginApi.value.refresh({ scope: 'ended' }))
+    message.value = res?.message || '已刷新'
+    await load()
+  } catch (err) {
+    error.value = errorMessage(err)
+  } finally {
+    refreshingEnded.value = false
   }
 }
 
@@ -134,17 +163,53 @@ async function addShow(item, season = 1) {
   }
 }
 
-async function importLibrary() {
-  busy.value = true
+/** 打开确认弹窗：先比对一次，默认全勾。 */
+async function openImport() {
+  importOpen.value = true
+  importSync.value = false
+  await loadImportPreview()
+}
+
+/**
+ * 比对。「先强制同步媒体库再比对」打开时会调宿主 `MediaServerChain.sync`
+ * 跑一遍全库同步（较慢），换来「库里已删除的剧」也能被立刻识别出来。
+ */
+async function loadImportPreview() {
+  importBusy.value = true
   error.value = ''
   try {
-    const res = unwrapResponse(await pluginApi.value.importLibrary({ only_new: true }))
+    const res = unwrapResponse(await pluginApi.value.importPreview({ sync: importSync.value }))
+    importPreview.value = res
+    addSelected.value = (res?.added || []).map(item => item.tmdbid)
+    removeSelected.value = (res?.removed || []).map(item => item.tmdbid)
+    if (res?.sync_note) message.value = res.sync_note
+  } catch (err) {
+    error.value = errorMessage(err)
+  } finally {
+    importBusy.value = false
+  }
+}
+
+function toggleSelected(listRef, tmdbid) {
+  const index = listRef.value.indexOf(tmdbid)
+  if (index >= 0) listRef.value.splice(index, 1)
+  else listRef.value.push(tmdbid)
+}
+
+async function applyImport() {
+  importBusy.value = true
+  error.value = ''
+  try {
+    const res = unwrapResponse(
+      await pluginApi.value.importApply({ add: addSelected.value, remove: removeSelected.value }),
+    )
     message.value = res?.message || '导入完成'
+    importOpen.value = false
     await load()
   } catch (err) {
     error.value = errorMessage(err)
   } finally {
-    busy.value = false
+    importBusy.value = false
   }
 }
 
@@ -282,21 +347,39 @@ defineExpose({ load, loading })
               </div>
             </VCardText>
             <VCardActions class="pa-1">
-              <VSwitch
-                :model-value="show.auto_renew"
-                density="compact"
-                hide-details
-                label="续订"
-                @click.stop
-                @update:model-value="toggleRenew(show)"
-              />
+              <VTooltip
+                :text="
+                  reminderOnly
+                    ? '全局已设为「仅提醒模式」，单剧开关暂不生效'
+                    : '参与自动续订：发现新季时自动建订阅'
+                "
+                location="top"
+              >
+                <template #activator="{ props: switchProps }">
+                  <VSwitch
+                    v-bind="switchProps"
+                    :model-value="show.auto_renew"
+                    :disabled="reminderOnly"
+                    density="compact"
+                    hide-details
+                    label="续订"
+                    @click.stop
+                    @update:model-value="toggleRenew(show)"
+                  />
+                </template>
+              </VTooltip>
               <VSpacer />
-              <VBtn
-                icon="mdi-delete-outline"
-                size="x-small"
-                variant="text"
-                @click.stop="removeShow(show)"
-              />
+              <VTooltip text="移出追踪名单（不影响 MoviePilot 里的订阅）" location="top">
+                <template #activator="{ props: deleteProps }">
+                  <VBtn
+                    v-bind="deleteProps"
+                    icon="mdi-delete-outline"
+                    size="x-small"
+                    variant="text"
+                    @click.stop="removeShow(show)"
+                  />
+                </template>
+              </VTooltip>
             </VCardActions>
           </VCard>
         </VCol>
@@ -304,7 +387,26 @@ defineExpose({ load, loading })
 
       <template v-if="endedShows.length">
         <VDivider class="my-4" />
-        <div class="text-subtitle-2 mb-2">已完结 / 已砍（停止轮询）</div>
+        <div class="d-flex align-center flex-wrap ga-2 mb-2">
+          <span class="text-subtitle-2">
+            已完结 / 已砍（停止轮询）· {{ endedShows.length }} 部
+          </span>
+          <VSpacer />
+          <VTooltip text="重新向 TMDB 拉取这些剧的状态与季信息" location="top">
+            <template #activator="{ props: refreshProps }">
+              <VBtn
+                v-bind="refreshProps"
+                size="small"
+                variant="text"
+                prepend-icon="mdi-refresh"
+                :loading="refreshingEnded"
+                @click.stop="refreshEnded"
+              >
+                刷新 TMDB 信息
+              </VBtn>
+            </template>
+          </VTooltip>
+        </div>
         <VRow dense>
           <VCol v-for="show in endedShows" :key="show.tmdbid" cols="6" sm="4" md="3" lg="2">
             <VCard class="h-100" variant="tonal" style="opacity: 0.6" @click="openDetail(show)">
@@ -320,29 +422,38 @@ defineExpose({ load, loading })
       </template>
     </VContainer>
 
-    <!-- 右下角圆形菜单按钮 -->
-    <VMenu v-model="fabOpen" location="top end" offset="16">
-      <template #activator="{ props: activatorProps }">
-        <VFab
-          v-bind="activatorProps"
-          icon="mdi-plus"
-          size="large"
-          color="primary"
-          class="autorenew-fab"
-          :loading="busy"
-        />
-      </template>
-      <VList density="compact" min-width="200">
-        <VListItem prepend-icon="mdi-magnify" title="添加剧集" @click="searchOpen = true" />
-        <VListItem prepend-icon="mdi-calendar-month" title="播出日历" @click="openCalendar" />
-        <VListItem prepend-icon="mdi-sync" title="立即检查" @click="runCheck" />
-        <VListItem
-          prepend-icon="mdi-library-shelves"
-          title="从媒体库导入"
-          @click="importLibrary"
-        />
-      </VList>
-    </VMenu>
+    <!--
+      右下角悬浮圆形菜单按钮。
+      用 Teleport 挂到 body：联邦组件若挂在一个带 transform 的容器里，
+      `position: fixed` 会相对那个容器定位而不是视口 —— 这就是「按钮有一半在屏幕外」
+      的成因（实测症状）。挂到 body 之后，视口才是包含块。
+    -->
+    <Teleport to="body">
+      <div class="autorenew-fab-host">
+        <VMenu v-model="fabOpen" location="top end" offset="16">
+          <template #activator="{ props: activatorProps }">
+            <VFab
+              v-bind="activatorProps"
+              icon="mdi-dots-grid"
+              size="large"
+              color="primary"
+              elevation="8"
+              :loading="busy"
+            />
+          </template>
+          <VList density="compact" min-width="200">
+            <VListItem prepend-icon="mdi-magnify" title="添加剧集" @click="searchOpen = true" />
+            <VListItem prepend-icon="mdi-calendar-month" title="播出日历" @click="openCalendar" />
+            <VListItem prepend-icon="mdi-sync" title="立即检查" @click="runCheck" />
+            <VListItem
+              prepend-icon="mdi-library-shelves"
+              title="从媒体库导入…"
+              @click="openImport"
+            />
+          </VList>
+        </VMenu>
+      </div>
+    </Teleport>
 
     <!-- 搜索 / 添加 -->
     <VDialog v-model="searchOpen" max-width="720">
@@ -451,6 +562,108 @@ defineExpose({ load, loading })
         </VCardActions>
       </VCard>
     </VDialog>
+
+    <!-- 从媒体库导入：先比对、逐条确认，再执行 -->
+    <VDialog v-model="importOpen" max-width="720" scrollable>
+      <VCard>
+        <VCardTitle class="text-subtitle-1">从媒体库导入</VCardTitle>
+        <VCardText>
+          <VAlert type="info" variant="tonal" density="compact" class="mb-3">
+            只影响本插件的追踪名单，<strong>不会创建任何 MoviePilot 订阅</strong>。
+          </VAlert>
+
+          <VSwitch
+            v-model="importSync"
+            label="先强制同步媒体库再比对"
+            density="compact"
+            hide-details
+            color="primary"
+            :disabled="importBusy"
+            @update:model-value="loadImportPreview"
+          />
+          <div class="text-caption text-medium-emphasis mb-3">
+            宿主每 6 小时自动同步一次媒体库；打开这项会立刻跑一遍全库同步（较慢），
+            这样「已从库里删除的剧」也能马上被识别出来。
+            <template v-if="importPreview?.last_sync">
+              <br />当前缓存最近更新：{{ importPreview.last_sync }}
+            </template>
+          </div>
+
+          <VProgressLinear v-if="importBusy" indeterminate class="mb-3" />
+
+          <template v-if="importPreview">
+            <div class="text-subtitle-2 mb-1">
+              将新增 {{ importPreview.added.length }} 部
+              <span class="text-caption text-medium-emphasis">
+                （库内共 {{ importPreview.library_total }} 部，名单内已有 {{ importPreview.kept }} 部）
+              </span>
+            </div>
+            <VList v-if="importPreview.added.length" density="compact" class="mb-3">
+              <VListItem
+                v-for="item in importPreview.added"
+                :key="`add-${item.tmdbid}`"
+                :title="item.title"
+                :subtitle="`TMDB ${item.tmdbid} · 库内最高第 ${item.season} 季`"
+              >
+                <template #prepend>
+                  <VCheckbox
+                    :model-value="addSelected.includes(item.tmdbid)"
+                    density="compact"
+                    hide-details
+                    color="primary"
+                    @click.stop
+                    @update:model-value="toggleSelected(addSelected, item.tmdbid)"
+                  />
+                </template>
+              </VListItem>
+            </VList>
+            <VAlert v-else type="success" variant="tonal" density="compact" class="mb-3">
+              没有需要新增的剧。
+            </VAlert>
+
+            <div class="text-subtitle-2 mb-1">将移除 {{ importPreview.removed.length }} 部</div>
+            <div class="text-caption text-medium-emphasis mb-2">
+              只列出「来源 = 媒体库导入」且现在库里已找不到的剧；手动添加、订阅同步进来的永不在此列。
+            </div>
+            <VList v-if="importPreview.removed.length" density="compact">
+              <VListItem
+                v-for="item in importPreview.removed"
+                :key="`del-${item.tmdbid}`"
+                :title="item.title"
+                :subtitle="`TMDB ${item.tmdbid} · 媒体库里已找不到`"
+              >
+                <template #prepend>
+                  <VCheckbox
+                    :model-value="removeSelected.includes(item.tmdbid)"
+                    density="compact"
+                    hide-details
+                    color="error"
+                    @click.stop
+                    @update:model-value="toggleSelected(removeSelected, item.tmdbid)"
+                  />
+                </template>
+              </VListItem>
+            </VList>
+            <VAlert v-else type="success" variant="tonal" density="compact">
+              没有需要移除的剧。
+            </VAlert>
+          </template>
+        </VCardText>
+        <VCardActions>
+          <VSpacer />
+          <VBtn variant="text" :disabled="importBusy" @click="importOpen = false">取消</VBtn>
+          <VBtn
+            color="primary"
+            variant="flat"
+            :loading="importBusy"
+            :disabled="!importPreview"
+            @click="applyImport"
+          >
+            执行导入
+          </VBtn>
+        </VCardActions>
+      </VCard>
+    </VDialog>
   </div>
 </template>
 
@@ -460,10 +673,11 @@ defineExpose({ load, loading })
   min-height: 100%;
 }
 
-.autorenew-fab {
+/* Teleport 到 body 后的锚点：钉在视口右下角；z-index 低于对话框（~2400）*/
+.autorenew-fab-host {
   position: fixed;
   right: 24px;
   bottom: 24px;
-  z-index: 5;
+  z-index: 2000;
 }
 </style>
