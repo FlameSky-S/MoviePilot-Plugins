@@ -33,7 +33,13 @@ _load_core()
 
 from datetime import date  # noqa: E402
 
-from autorenew_core.calendarview import build_month_grid  # noqa: E402
+from autorenew_core.calendarview import (  # noqa: E402
+    build_month_grid,
+    episode_code,
+    episode_label,
+    merge_day_episodes,
+)
+from autorenew_core.crontext import describe_cron  # noqa: E402
 from autorenew_core.library import diff_watchlist, library_candidates, parse_seasoninfo  # noqa: E402
 from autorenew_core.models import (  # noqa: E402
     SOURCE_LIBRARY,
@@ -828,6 +834,141 @@ def test_season_numbers_roundtrip_reproduces_season_stats():
     direct = season_stats(seasons, [1, 3])
     rebuilt = season_stats([{"season_number": n} for n in season_numbers(seasons)], [1, 3])
     assert direct == rebuilt == {"library": 2, "total": 3}, (direct, rebuilt)
+
+
+# --------------------------------------------------------------------------
+# 播出日历：按集展示 + 同日连续集合并
+# --------------------------------------------------------------------------
+
+def _ep(date_str, episode, *, season=2, tmdbid=1, title="剧"):
+    return {
+        "date": date_str,
+        "season": season,
+        "episode": episode,
+        "tmdbid": tmdbid,
+        "title": title,
+        "name": f"第 {episode} 集",
+    }
+
+
+@case
+def test_episode_code_pads_to_two_digits():
+    assert episode_code(2, 1) == "S02E01"
+    assert episode_code(12, 108) == "S12E108"
+    # 单集只写一个 E
+    assert episode_label(2, 1, 1) == "S02E01"
+    # 连续多集尾号不重复写 S，只写 -E08（与 Sonarr 一致）
+    assert episode_label(2, 1, 8) == "S02E01-E08"
+    assert episode_label(1, 9, 10) == "S01E09-E10"
+
+
+@case
+def test_merge_day_episodes_merges_consecutive_episodes_same_day():
+    """同一天连播 8 集 -> 一个事件 S02E01-E08（用户明确要的形态）。"""
+    events = merge_day_episodes([_ep("2026-10-20", n) for n in range(1, 9)])
+    assert len(events) == 1, events
+    event = events[0]
+    assert event["label"] == "S02E01-E08", event["label"]
+    assert event["episode_start"] == 1 and event["episode_end"] == 8
+    assert event["episode_count"] == 8
+    assert event["episodes"] == list(range(1, 9))
+
+
+@case
+def test_merge_day_episodes_splits_non_consecutive_runs():
+    """E01 与 E05 同一天但不相邻：必须拆两个，不能谎报成 E01-E05。"""
+    events = merge_day_episodes([_ep("2026-10-20", 1), _ep("2026-10-20", 5)])
+    assert [e["label"] for e in events] == ["S02E01", "S02E05"], events
+
+
+@case
+def test_merge_day_episodes_keeps_days_and_shows_apart():
+    """跨天不合并；不同剧同一天也不合并。"""
+    events = merge_day_episodes(
+        [
+            _ep("2026-10-20", 1, tmdbid=1, title="甲"),
+            _ep("2026-10-21", 2, tmdbid=1, title="甲"),
+            _ep("2026-10-20", 3, tmdbid=2, title="乙"),
+            _ep("2026-10-20", 1, season=3, tmdbid=1, title="甲"),
+        ]
+    )
+    assert len(events) == 4, [e["label"] for e in events]
+    # 甲 S02E01(10-20) / 甲 S02E02(10-21) / 甲 S03E01(10-20) / 乙 S02E03(10-20)
+    assert sorted(e["label"] for e in events) == [
+        "S02E01",
+        "S02E02",
+        "S02E03",
+        "S03E01",
+    ]
+
+
+@case
+def test_merge_day_episodes_sorts_and_drops_bad_rows():
+    events = merge_day_episodes(
+        [
+            {"date": "2026-10-20", "season": 1, "episode": None, "tmdbid": 1, "title": "甲"},
+            {"date": "bad", "season": 1, "episode": 2, "tmdbid": 1, "title": "甲"},
+            None,
+            {"date": "2026-10-20", "season": 1, "episode": 2, "tmdbid": 1, "title": "乙"},
+            {"date": "2026-10-19", "season": 1, "episode": 5, "tmdbid": 1, "title": "乙"},
+        ]
+    )
+    assert [(e["date"], e["title"], e["label"]) for e in events] == [
+        ("2026-10-19", "乙", "S01E05"),
+        ("2026-10-20", "乙", "S01E02"),
+    ], events
+    assert merge_day_episodes(None) == []
+    assert merge_day_episodes([]) == []
+
+
+@case
+def test_build_month_grid_attaches_episode_events():
+    """网格照挂带 label 的集事件（回归：以前事件只有季号，没有集号）。"""
+    events = merge_day_episodes([_ep("2026-10-20", n) for n in range(1, 4)])
+    grid = build_month_grid(2026, 10, events, today=date(2026, 10, 1))
+    day = [
+        cell
+        for week in grid["weeks"]
+        for cell in week
+        if cell["date"] == "2026-10-20"
+    ][0]
+    assert [e["label"] for e in day["events"]] == ["S02E01-E03"], day["events"]
+    assert grid["events_total"] == 1
+
+
+# --------------------------------------------------------------------------
+# crontab -> 自然语言
+# --------------------------------------------------------------------------
+
+@case
+def test_describe_cron_default_every_six_hours():
+    """默认表达式 `0 */6 * * *` 要能说人话，且点出真实触发时刻。"""
+    text = describe_cron("0 */6 * * *")
+    assert text == "每 6 小时一次（0、6、12、18 点的第 0 分）", text
+
+
+@case
+def test_describe_cron_daily_and_weekly_and_monthly():
+    assert describe_cron("0 3 * * *") == "每天 03:00"
+    assert describe_cron("30 8 * * 1") == "每周一 08:30"
+    assert describe_cron("0 0 1 * *") == "每月 1 日 00:00"
+    assert describe_cron("15 2 * * 1,3") == "每周一、周三 02:15"
+
+
+@case
+def test_describe_cron_minute_level_and_every_minute():
+    assert describe_cron("*/15 * * * *") == "每 15 分钟"
+    assert describe_cron("* * * * *") == "每分钟"
+    assert describe_cron("5 * * * *") == "每小时的第 5 分"
+
+
+@case
+def test_describe_cron_falls_back_honestly():
+    """认不出来就逐字段报，绝不编一句可能错的自然语言。"""
+    assert describe_cron("0 */6") == ""            # 段数不对
+    assert describe_cron("") == ""
+    assert describe_cron(None) == ""
+    assert describe_cron("x 3 * * *") == "分钟 x；小时 3；日 *；月 *；星期 *"
 
 
 # --------------------------------------------------------------------------

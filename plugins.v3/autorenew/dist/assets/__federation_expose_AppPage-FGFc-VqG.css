@@ -1,11 +1,11 @@
 
-.autorenew-app[data-v-60d11f02] {
+.autorenew-app[data-v-ef1c9f80] {
   position: relative;
   min-height: 100%;
 }
 
 /* Teleport 到 body 后的锚点：钉在视口右下角；z-index 低于对话框（~2400）*/
-.autorenew-fab-host[data-v-60d11f02] {
+.autorenew-fab-host[data-v-ef1c9f80] {
   position: fixed;
   right: 24px;
   bottom: 24px;
@@ -13,128 +13,129 @@
 }
 
 /* ---------------- 播出日历：月历网格 ---------------- */
-.autorenew-cal-title[data-v-60d11f02] {
+.autorenew-cal-title[data-v-ef1c9f80] {
   min-width: 104px;
   text-align: center;
   font-weight: 600;
   font-size: 0.9rem;
 }
-.autorenew-cal-weekdays[data-v-60d11f02],
-.autorenew-cal-week[data-v-60d11f02] {
+.autorenew-cal-weekdays[data-v-ef1c9f80],
+.autorenew-cal-week[data-v-ef1c9f80] {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 4px;
 }
-.autorenew-cal-weekdays[data-v-60d11f02] {
+.autorenew-cal-weekdays[data-v-ef1c9f80] {
   margin-bottom: 4px;
 }
-.autorenew-cal-week[data-v-60d11f02] {
-  margin-bottom: 4px;
+.autorenew-cal-week[data-v-ef1c9f80] {
+  margin-bottom: 6px;
 }
-.autorenew-cal-weekday[data-v-60d11f02] {
+.autorenew-cal-weekday[data-v-ef1c9f80] {
   text-align: center;
-  font-size: 0.72rem;
+  font-size: 0.84rem;
   letter-spacing: 0.08em;
-  padding: 2px 0;
+  padding: 4px 0;
   opacity: 0.65;
 }
-.autorenew-cal-weekday.is-weekend[data-v-60d11f02] {
+.autorenew-cal-weekday.is-weekend[data-v-ef1c9f80] {
   color: rgb(var(--v-theme-secondary));
   opacity: 0.9;
 }
-.autorenew-cal-cell[data-v-60d11f02] {
-  min-height: 88px;
-  padding: 4px 5px 5px;
+.autorenew-cal-cell[data-v-ef1c9f80] {
+  min-height: 124px;
+  padding: 6px 7px 7px;
   border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: 6px;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   overflow: hidden;
   background: rgba(var(--v-theme-surface), 0.35);
 }
-.autorenew-cal-cell.is-out[data-v-60d11f02] {
+.autorenew-cal-cell.is-out[data-v-ef1c9f80] {
   opacity: 0.34;
 }
-.autorenew-cal-cell.has-events[data-v-60d11f02] {
+.autorenew-cal-cell.has-events[data-v-ef1c9f80] {
   background: rgba(var(--v-theme-primary), 0.06);
 }
-.autorenew-cal-cell.is-today[data-v-60d11f02] {
+.autorenew-cal-cell.is-today[data-v-ef1c9f80] {
   border-color: rgb(var(--v-theme-primary));
   box-shadow: inset 0 0 0 1px rgb(var(--v-theme-primary));
 }
-.autorenew-cal-daynum[data-v-60d11f02] {
-  font-size: 0.72rem;
+.autorenew-cal-daynum[data-v-ef1c9f80] {
+  font-size: 0.86rem;
   line-height: 1.2;
   text-align: right;
   opacity: 0.85;
 }
-.autorenew-cal-todaynum[data-v-60d11f02] {
+.autorenew-cal-todaynum[data-v-ef1c9f80] {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 19px;
-  height: 19px;
+  width: 23px;
+  height: 23px;
   border-radius: 50%;
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
   font-weight: 700;
 }
-.autorenew-cal-events[data-v-60d11f02] {
+.autorenew-cal-events[data-v-ef1c9f80] {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   overflow: hidden;
   min-height: 0;
 }
-.autorenew-cal-event[data-v-60d11f02] {
+.autorenew-cal-event[data-v-ef1c9f80] {
   display: flex;
-  gap: 4px;
+  gap: 5px;
   align-items: center;
-  padding: 1px 2px;
+  padding: 2px 3px;
   border-radius: 4px;
   cursor: pointer;
   transition: background-color 0.15s;
 }
-.autorenew-cal-event[data-v-60d11f02]:hover {
+.autorenew-cal-event[data-v-ef1c9f80]:hover {
   background: rgba(var(--v-theme-primary), 0.18);
 }
-.autorenew-cal-poster[data-v-60d11f02] {
+.autorenew-cal-poster[data-v-ef1c9f80] {
   flex: none;
   border-radius: 3px;
 }
-.autorenew-cal-eventtext[data-v-60d11f02] {
+.autorenew-cal-eventtext[data-v-ef1c9f80] {
   min-width: 0;
 }
-.autorenew-cal-eventtitle[data-v-60d11f02] {
-  font-size: 0.7rem;
-  line-height: 1.15;
+.autorenew-cal-eventtitle[data-v-ef1c9f80] {
+  font-size: 0.8rem;
+  line-height: 1.2;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.autorenew-cal-eventmeta[data-v-60d11f02] {
-  font-size: 0.62rem;
-  line-height: 1.1;
-  opacity: 0.62;
+.autorenew-cal-eventmeta[data-v-ef1c9f80] {
+  font-size: 0.72rem;
+  line-height: 1.15;
+  opacity: 0.68;
+  font-variant-numeric: tabular-nums;
 }
-.autorenew-cal-more[data-v-60d11f02] {
-  font-size: 0.62rem;
+.autorenew-cal-more[data-v-ef1c9f80] {
+  font-size: 0.72rem;
   opacity: 0.62;
-  padding-left: 2px;
+  padding-left: 3px;
 }
-.autorenew-cal-upcoming[data-v-60d11f02] {
+.autorenew-cal-upcoming[data-v-ef1c9f80] {
   display: flex;
-  gap: 6px;
+  gap: 7px;
   align-items: center;
-  max-width: 236px;
-  padding: 4px 8px 4px 4px;
+  max-width: 300px;
+  padding: 5px 10px 5px 5px;
   border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: 6px;
   cursor: pointer;
   transition: border-color 0.15s, background-color 0.15s;
 }
-.autorenew-cal-upcoming[data-v-60d11f02]:hover {
+.autorenew-cal-upcoming[data-v-ef1c9f80]:hover {
   border-color: rgb(var(--v-theme-primary));
   background: rgba(var(--v-theme-primary), 0.08);
 }

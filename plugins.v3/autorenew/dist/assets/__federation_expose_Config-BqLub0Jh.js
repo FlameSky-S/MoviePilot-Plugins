@@ -1,12 +1,115 @@
 import { importShared } from './__federation_fn_import-JrT3xvdd.js';
-import { _ as _export_sfc, c as createAutoRenewApi, u as unwrapResponse, e as errorMessage } from './_plugin-vue_export-helper-Ds2vui6h.js';
+
+function unwrapResponse(response) {
+  if (response && Object.prototype.hasOwnProperty.call(response, 'data') && response.success !== undefined) {
+    return response.data
+  }
+  return response?.data ?? response
+}
+
+function errorMessage(error) {
+  if (!error) return ''
+  if (typeof error === 'string') return error
+  return error.message || error.reason || String(error)
+}
+
+function seasonLabel(season) {
+  const number = Number(season ?? 0);
+  return number > 0 ? `第 ${number} 季` : '特别季'
+}
+
+function formatDate(value) {
+  if (!value) return ''
+  const text = String(value).slice(0, 10);
+  return text || ''
+}
+
+function resolvePluginBase(pluginBase) {
+  const raw = typeof pluginBase === 'function' ? pluginBase() : (pluginBase?.value ?? pluginBase);
+  return raw || 'plugin/AutoRenew'
+}
+
+/**
+ * 宿主通过 `api` prop 注入调用器：路径是 `plugin/<PluginId><endpoint>`。
+ */
+function createAutoRenewApi(api, pluginBase) {
+  const get = endpoint => api.get(`${resolvePluginBase(pluginBase)}${endpoint}`);
+  const post = (endpoint, payload) => api.post(`${resolvePluginBase(pluginBase)}${endpoint}`, payload);
+  const query = params => {
+    const search = new URLSearchParams(params || {}).toString();
+    return search ? `?${search}` : ''
+  };
+
+  return {
+    unwrapResponse,
+    status() {
+      return get('/status')
+    },
+    shows() {
+      return get('/shows')
+    },
+    addShow(payload) {
+      return post('/shows/add', payload)
+    },
+    removeShow(payload) {
+      return post('/shows/remove', payload)
+    },
+    toggleShow(payload) {
+      return post('/shows/toggle', payload)
+    },
+    showSeasons(params) {
+      return get(`/shows/seasons?${params.toString()}`)
+    },
+    search(params) {
+      return get(`/search?${params.toString()}`)
+    },
+    /** 导入前比对：返回 {added, removed, kept, library_total, last_sync}。 */
+    importPreview(params = {}) {
+      return get(`/import_preview${query(params)}`)
+    },
+    /** 按确认结果执行：{add: [tmdbid], remove: [tmdbid]}。 */
+    importApply(payload = {}) {
+      return post('/import_apply', payload)
+    },
+    /** 重新拉 TMDB 元数据：{scope: 'ended' | 'all'}。 */
+    refresh(payload = { scope: 'ended' }) {
+      return post('/refresh', payload)
+    },
+    calendar(params = {}) {
+      return get(`/calendar${query(params)}`)
+    },
+    /** 续订规则候选项：{sites, filter_groups, downloaders, quality_choices, resolution_choices}。 */
+    ruleOptions() {
+      return get('/rule_options')
+    },
+    /** 读取本插件配置（页面内「设置」入口回显用）。 */
+    config() {
+      return get('/config')
+    },
+    /** 保存本插件配置：后端 update_config + 立即 init_plugin 生效。 */
+    saveConfig(payload) {
+      return post('/config', payload)
+    },
+    check() {
+      return post('/check', {})
+    },
+  }
+}
+
+const _export_sfc = (sfc, props) => {
+  const target = sfc.__vccOpts || sfc;
+  for (const [key, val] of props) {
+    target[key] = val;
+  }
+  return target;
+};
 
 const {toDisplayString:_toDisplayString,createTextVNode:_createTextVNode,resolveComponent:_resolveComponent,withCtx:_withCtx,openBlock:_openBlock,createBlock:_createBlock,createCommentVNode:_createCommentVNode,createVNode:_createVNode,createElementBlock:_createElementBlock,createElementVNode:_createElementVNode} = await importShared('vue');
 
 
 const _hoisted_1 = { class: "autorenew-config" };
 const _hoisted_2 = {
-  key: 1,
+  key: 2,
   class: "text-caption"
 };
 const _hoisted_3 = { class: "d-flex align-center flex-wrap ga-2 mb-1" };
@@ -209,10 +312,23 @@ return (_ctx, _cache) => {
               "prepend-icon": "mdi-television"
             }, {
               default: _withCtx(() => [
-                _createTextVNode(" 追踪 " + _toDisplayString(status.value?.tracked ?? '—') + " 部 ", 1)
+                _createTextVNode(" 追踪 " + _toDisplayString(status.value?.tracking ?? status.value?.tracked ?? '—') + " 部 ", 1)
               ]),
               _: 1
             }),
+            (status.value?.terminated)
+              ? (_openBlock(), _createBlock(_component_VChip, {
+                  key: 0,
+                  size: "small",
+                  variant: "tonal",
+                  title: '已完结 / 已砍，已停止轮询；合计 ' + (status.value?.tracked ?? 0) + ' 部'
+                }, {
+                  default: _withCtx(() => [
+                    _createTextVNode(" 已完结 " + _toDisplayString(status.value.terminated) + " 部 ", 1)
+                  ]),
+                  _: 1
+                }, 8, ["title"]))
+              : _createCommentVNode("", true),
             _createVNode(_component_VChip, {
               size: "small",
               variant: "tonal",
@@ -225,13 +341,13 @@ return (_ctx, _cache) => {
             }),
             (status.value)
               ? (_openBlock(), _createBlock(_component_VChip, {
-                  key: 0,
+                  key: 1,
                   size: "small",
                   variant: "tonal",
                   color: status.value.auto_subscribe ? 'success' : 'warning'
                 }, {
                   default: _withCtx(() => [
-                    _createTextVNode(_toDisplayString(status.value.auto_subscribe ? '自动建订阅' : '仅提醒模式'), 1)
+                    _createTextVNode(_toDisplayString(status.value.auto_subscribe ? '自动续订已开启' : '仅提醒模式'), 1)
                   ]),
                   _: 1
                 }, 8, ["color"]))
@@ -589,6 +705,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Config = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-a2d08b83"]]);
+const ConfigPanel = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-dcfb6669"]]);
 
-export { Config as default };
+export { _export_sfc as _, createAutoRenewApi as c, ConfigPanel as default, errorMessage as e, formatDate as f, seasonLabel as s, unwrapResponse as u };

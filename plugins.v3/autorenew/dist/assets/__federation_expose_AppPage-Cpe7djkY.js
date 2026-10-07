@@ -1,7 +1,7 @@
 import { importShared } from './__federation_fn_import-JrT3xvdd.js';
-import { _ as _export_sfc, c as createAutoRenewApi, s as seasonLabel, f as formatDate, u as unwrapResponse, e as errorMessage } from './_plugin-vue_export-helper-Ds2vui6h.js';
+import ConfigPanel, { _ as _export_sfc, c as createAutoRenewApi, s as seasonLabel, f as formatDate, u as unwrapResponse, e as errorMessage } from './__federation_expose_Config-BqLub0Jh.js';
 
-const {toDisplayString:_toDisplayString,createTextVNode:_createTextVNode,resolveComponent:_resolveComponent,withCtx:_withCtx,openBlock:_openBlock,createBlock:_createBlock,createCommentVNode:_createCommentVNode,createVNode:_createVNode,createElementVNode:_createElementVNode,renderList:_renderList,Fragment:_Fragment,createElementBlock:_createElementBlock,unref:_unref,withModifiers:_withModifiers,mergeProps:_mergeProps,Teleport:_Teleport,withKeys:_withKeys,normalizeClass:_normalizeClass} = await importShared('vue');
+const {toDisplayString:_toDisplayString,createTextVNode:_createTextVNode,resolveComponent:_resolveComponent,withCtx:_withCtx,openBlock:_openBlock,createBlock:_createBlock,createCommentVNode:_createCommentVNode,mergeProps:_mergeProps,createVNode:_createVNode,createElementVNode:_createElementVNode,renderList:_renderList,Fragment:_Fragment,createElementBlock:_createElementBlock,unref:_unref,withModifiers:_withModifiers,Teleport:_Teleport,withKeys:_withKeys,normalizeClass:_normalizeClass} = await importShared('vue');
 
 
 const _hoisted_1 = { class: "autorenew-app" };
@@ -53,7 +53,7 @@ const _hoisted_34 = { class: "text-subtitle-2 mb-1" };
 
 const {computed,onMounted,ref} = await importShared('vue');
 
-const CAL_MAX_PER_DAY = 3;
+const CAL_MAX_PER_DAY = 4;
 
 
 const _sfc_main = {
@@ -76,7 +76,7 @@ const pluginBase = computed(() => `plugin/${props.pluginId || 'AutoRenew'}`);
 const pluginApi = computed(() => createAutoRenewApi(props.api, pluginBase));
 
 const SORTS = [
-  { value: 'next_airing', title: 'Next Airing' },
+  { value: 'next_airing', title: '按播出时间' },
   { value: 'recent', title: '最近添加' },
 ];
 
@@ -112,10 +112,25 @@ const removeSelected = ref([]);
 
 const refreshingEnded = ref(false);
 
+// 页面内「设置」：直接渲染 Config.vue（与插件列表里的设置弹窗同一份表单）
+const settingsOpen = ref(false);
+const settingsConfig = ref(null);
+const settingsLoading = ref(false);
+
 const activeShows = computed(() => shows.value.filter(show => !show.terminated));
 const endedShows = computed(() => shows.value.filter(show => show.terminated));
 /** 全局「仅提醒模式」时，单剧的续订开关没有任何作用 —— UI 要禁用而不是假装能点。 */
 const reminderOnly = computed(() => !!status.value && !status.value.auto_subscribe);
+
+/** cron 的自然语言说明由后端算好（这样它能进单测），前端只负责展示。 */
+const cronTooltip = computed(() => {
+  if (!status.value) return ''
+  const text = String(status.value.cron_text || '').trim();
+  const expr = status.value.cron;
+  if (!text) return `检测周期（crontab）：${expr}`
+  if (text.startsWith('分钟 ')) return `检测周期：${text}（未识别的写法，按字段直译）`
+  return `检测周期：${text}（crontab：${expr}）`
+});
 
 async function load() {
   loading.value = true;
@@ -136,6 +151,33 @@ async function load() {
 
 async function changeSort() {
   await load();
+}
+
+/** 打开页面内设置弹窗：先取回当前配置再挂载表单（表单在 onMounted 里读 initial-config）。 */
+async function openSettings() {
+  settingsLoading.value = true;
+  error.value = '';
+  try {
+    settingsConfig.value = unwrapResponse(await pluginApi.value.config()) || {};
+    settingsOpen.value = true;
+  } catch (err) {
+    error.value = errorMessage(err);
+  } finally {
+    settingsLoading.value = false;
+  }
+}
+
+/** 保存：后端 update_config + init_plugin 立即生效，不需要宿主重载。 */
+async function saveSettings(payload) {
+  try {
+    const res = unwrapResponse(await pluginApi.value.saveConfig(payload));
+    settingsOpen.value = false;
+    settingsConfig.value = null;
+    message.value = res?.message || '设置已保存并生效';
+    await load();
+  } catch (err) {
+    error.value = errorMessage(err);
+  }
 }
 
 async function toggleRenew(show) {
@@ -324,6 +366,15 @@ function visibleEvents(cell) {
   return (cell.events || []).slice(0, CAL_MAX_PER_DAY)
 }
 
+/** 日历事件的 hover 提示：剧名 · 集号 · 状态 + 集标题（有就列出来）。 */
+function calendarEventTitle(event) {
+  const label = event.label || `S${event.season}`;
+  const head = `${event.title} · ${label} · ${event.status_label}`;
+  const names = (event.episode_names || []).filter(Boolean);
+  if (!names.length) return head
+  return `${head}\n${names.join(' / ')}`
+}
+
 function openCalendarEvent(event) {
   const show = shows.value.find(item => item.tmdbid === event.tmdbid);
   calendarOpen.value = false;
@@ -359,6 +410,7 @@ __expose({ load, loading });
 return (_ctx, _cache) => {
   const _component_VAlert = _resolveComponent("VAlert");
   const _component_VChip = _resolveComponent("VChip");
+  const _component_VTooltip = _resolveComponent("VTooltip");
   const _component_VSpacer = _resolveComponent("VSpacer");
   const _component_VSelect = _resolveComponent("VSelect");
   const _component_VBtn = _resolveComponent("VBtn");
@@ -367,7 +419,6 @@ return (_ctx, _cache) => {
   const _component_VCardText = _resolveComponent("VCardText");
   const _component_VDivider = _resolveComponent("VDivider");
   const _component_VSwitch = _resolveComponent("VSwitch");
-  const _component_VTooltip = _resolveComponent("VTooltip");
   const _component_VCardActions = _resolveComponent("VCardActions");
   const _component_VCard = _resolveComponent("VCard");
   const _component_VCol = _resolveComponent("VCol");
@@ -376,15 +427,15 @@ return (_ctx, _cache) => {
   const _component_VListItem = _resolveComponent("VListItem");
   const _component_VList = _resolveComponent("VList");
   const _component_VMenu = _resolveComponent("VMenu");
+  const _component_VCardItem = _resolveComponent("VCardItem");
+  const _component_VDialog = _resolveComponent("VDialog");
   const _component_VCardTitle = _resolveComponent("VCardTitle");
   const _component_VTextField = _resolveComponent("VTextField");
   const _component_VProgressLinear = _resolveComponent("VProgressLinear");
   const _component_VAvatar = _resolveComponent("VAvatar");
   const _component_VListItemTitle = _resolveComponent("VListItemTitle");
   const _component_VListItemSubtitle = _resolveComponent("VListItemSubtitle");
-  const _component_VDialog = _resolveComponent("VDialog");
   const _component_VTable = _resolveComponent("VTable");
-  const _component_VCardItem = _resolveComponent("VCardItem");
   const _component_VCheckbox = _resolveComponent("VCheckbox");
 
   return (_openBlock(), _createElementBlock("div", _hoisted_1, [
@@ -434,7 +485,7 @@ return (_ctx, _cache) => {
                 "prepend-icon": "mdi-television"
               }, {
                 default: _withCtx(() => [
-                  _createTextVNode(" 追踪 " + _toDisplayString(status.value.tracked) + " 部 ", 1)
+                  _createTextVNode(" 追踪 " + _toDisplayString(status.value.tracking ?? status.value.tracked) + " 部 ", 1)
                 ]),
                 _: 1
               }))
@@ -444,23 +495,46 @@ return (_ctx, _cache) => {
                 key: 1,
                 size: "small",
                 variant: "tonal",
-                "prepend-icon": "mdi-clock-outline"
+                color: "primary",
+                "prepend-icon": "mdi-autorenew"
               }, {
                 default: _withCtx(() => [
-                  _createTextVNode(_toDisplayString(status.value.cron), 1)
+                  _createTextVNode(" 自动续订 " + _toDisplayString(status.value.auto_renew_on ?? 0) + " 部 ", 1)
                 ]),
                 _: 1
               }))
             : _createCommentVNode("", true),
           (status.value)
-            ? (_openBlock(), _createBlock(_component_VChip, {
+            ? (_openBlock(), _createBlock(_component_VTooltip, {
                 key: 2,
+                text: cronTooltip.value,
+                location: "bottom",
+                "max-width": "360"
+              }, {
+                activator: _withCtx(({ props: cronProps }) => [
+                  _createVNode(_component_VChip, _mergeProps(cronProps, {
+                    size: "small",
+                    variant: "tonal",
+                    "prepend-icon": "mdi-clock-outline"
+                  }), {
+                    default: _withCtx(() => [
+                      _createTextVNode(_toDisplayString(status.value.cron), 1)
+                    ]),
+                    _: 1
+                  }, 16)
+                ]),
+                _: 1
+              }, 8, ["text"]))
+            : _createCommentVNode("", true),
+          (status.value)
+            ? (_openBlock(), _createBlock(_component_VChip, {
+                key: 3,
                 size: "small",
                 color: status.value.auto_subscribe ? 'success' : 'warning',
                 variant: "tonal"
               }, {
                 default: _withCtx(() => [
-                  _createTextVNode(_toDisplayString(status.value.auto_subscribe ? '自动建订阅' : '仅提醒模式'), 1)
+                  _createTextVNode(_toDisplayString(status.value.auto_subscribe ? '自动续订已开启' : '仅提醒模式'), 1)
                 ]),
                 _: 1
               }, 8, ["color"]))
@@ -478,13 +552,38 @@ return (_ctx, _cache) => {
             "hide-details": "",
             style: {"max-width":"180px"}
           }, null, 8, ["modelValue"]),
-          _createVNode(_component_VBtn, {
-            icon: "mdi-refresh",
-            variant: "text",
-            size: "small",
-            loading: loading.value,
-            onClick: load
-          }, null, 8, ["loading"])
+          _createVNode(_component_VTooltip, {
+            text: "重新读取追踪名单与插件状态（只读，不访问 TMDB）",
+            location: "bottom",
+            "max-width": "320"
+          }, {
+            activator: _withCtx(({ props: reloadProps }) => [
+              _createVNode(_component_VBtn, _mergeProps(reloadProps, {
+                icon: "mdi-refresh",
+                variant: "text",
+                size: "small",
+                loading: loading.value,
+                onClick: load
+              }), null, 16, ["loading"])
+            ]),
+            _: 1
+          }),
+          _createVNode(_component_VTooltip, {
+            text: "打开插件设置：续订规则、检测周期、通知开关",
+            location: "bottom",
+            "max-width": "320"
+          }, {
+            activator: _withCtx(({ props: settingsProps }) => [
+              _createVNode(_component_VBtn, _mergeProps(settingsProps, {
+                icon: "mdi-cog-outline",
+                variant: "text",
+                size: "small",
+                loading: settingsLoading.value,
+                onClick: openSettings
+              }), null, 16, ["loading"])
+            ]),
+            _: 1
+          })
         ]),
         (!loading.value && !shows.value.length)
           ? (_openBlock(), _createBlock(_component_VAlert, {
@@ -492,7 +591,7 @@ return (_ctx, _cache) => {
               type: "info",
               variant: "tonal"
             }, {
-              default: _withCtx(() => [...(_cache[21] || (_cache[21] = [
+              default: _withCtx(() => [...(_cache[24] || (_cache[24] = [
                 _createTextVNode(" 追踪名单还是空的。点右下角按钮「从媒体库导入」，或「添加剧集」搜索 TMDB。 ", -1)
               ]))]),
               _: 1
@@ -537,13 +636,14 @@ return (_ctx, _cache) => {
                           _createElementVNode("div", _hoisted_5, [
                             _createVNode(_component_VChip, {
                               size: "x-small",
-                              variant: "tonal"
+                              variant: "tonal",
+                              title: show.tmdb_status ? `TMDB 状态：${show.tmdb_status}` : ''
                             }, {
                               default: _withCtx(() => [
                                 _createTextVNode(_toDisplayString(show.status_label), 1)
                               ]),
                               _: 2
-                            }, 1024),
+                            }, 1032, ["title"]),
                             _createVNode(_component_VChip, {
                               size: "x-small",
                               variant: "tonal",
@@ -646,7 +746,7 @@ return (_ctx, _cache) => {
                       loading: refreshingEnded.value,
                       onClick: _withModifiers(refreshEnded, ["stop"])
                     }), {
-                      default: _withCtx(() => [...(_cache[22] || (_cache[22] = [
+                      default: _withCtx(() => [...(_cache[25] || (_cache[25] = [
                         _createTextVNode(" 刷新 TMDB 信息 ", -1)
                       ]))]),
                       _: 1
@@ -679,13 +779,14 @@ return (_ctx, _cache) => {
                                 _createElementVNode("div", _hoisted_10, [
                                   _createVNode(_component_VChip, {
                                     size: "x-small",
-                                    variant: "tonal"
+                                    variant: "tonal",
+                                    title: show.tmdb_status ? `TMDB 状态：${show.tmdb_status}` : ''
                                   }, {
                                     default: _withCtx(() => [
                                       _createTextVNode(_toDisplayString(show.status_label), 1)
                                     ]),
                                     _: 2
-                                  }, 1024),
+                                  }, 1032, ["title"]),
                                   (show.total_seasons)
                                     ? (_openBlock(), _createBlock(_component_VChip, {
                                         key: 0,
@@ -770,15 +871,60 @@ return (_ctx, _cache) => {
       ])
     ])),
     _createVNode(_component_VDialog, {
+      modelValue: settingsOpen.value,
+      "onUpdate:modelValue": _cache[8] || (_cache[8] = $event => ((settingsOpen).value = $event)),
+      "max-width": "760",
+      scrollable: ""
+    }, {
+      default: _withCtx(() => [
+        _createVNode(_component_VCard, null, {
+          default: _withCtx(() => [
+            _createVNode(_component_VCardItem, { class: "py-2" }, {
+              title: _withCtx(() => [...(_cache[26] || (_cache[26] = [
+                _createElementVNode("span", { class: "text-subtitle-1" }, "自动续订 · 设置", -1)
+              ]))]),
+              append: _withCtx(() => [
+                _createVNode(_component_VBtn, {
+                  icon: "mdi-close",
+                  variant: "text",
+                  size: "small",
+                  onClick: _cache[6] || (_cache[6] = $event => (settingsOpen.value = false))
+                })
+              ]),
+              _: 1
+            }),
+            _createVNode(_component_VDivider),
+            _createVNode(_component_VCardText, { class: "pa-4" }, {
+              default: _withCtx(() => [
+                (settingsOpen.value && settingsConfig.value)
+                  ? (_openBlock(), _createBlock(ConfigPanel, {
+                      key: 0,
+                      "initial-config": settingsConfig.value,
+                      api: props.api,
+                      "plugin-id": props.pluginId,
+                      onSave: saveSettings,
+                      onClose: _cache[7] || (_cache[7] = $event => (settingsOpen.value = false))
+                    }, null, 8, ["initial-config", "api", "plugin-id"]))
+                  : _createCommentVNode("", true)
+              ]),
+              _: 1
+            })
+          ]),
+          _: 1
+        })
+      ]),
+      _: 1
+    }, 8, ["modelValue"]),
+    _createVNode(_component_VDialog, {
       modelValue: searchOpen.value,
-      "onUpdate:modelValue": _cache[8] || (_cache[8] = $event => ((searchOpen).value = $event)),
+      "onUpdate:modelValue": _cache[11] || (_cache[11] = $event => ((searchOpen).value = $event)),
       "max-width": "720"
     }, {
       default: _withCtx(() => [
         _createVNode(_component_VCard, null, {
           default: _withCtx(() => [
             _createVNode(_component_VCardTitle, { class: "text-subtitle-1" }, {
-              default: _withCtx(() => [...(_cache[23] || (_cache[23] = [
+              default: _withCtx(() => [...(_cache[27] || (_cache[27] = [
                 _createTextVNode("添加剧集", -1)
               ]))]),
               _: 1
@@ -787,7 +933,7 @@ return (_ctx, _cache) => {
               default: _withCtx(() => [
                 _createVNode(_component_VTextField, {
                   modelValue: searchKeyword.value,
-                  "onUpdate:modelValue": _cache[6] || (_cache[6] = $event => ((searchKeyword).value = $event)),
+                  "onUpdate:modelValue": _cache[9] || (_cache[9] = $event => ((searchKeyword).value = $event)),
                   label: "剧名",
                   density: "compact",
                   variant: "outlined",
@@ -834,7 +980,7 @@ return (_ctx, _cache) => {
                                     size: "small",
                                     variant: "tonal"
                                   }, {
-                                    default: _withCtx(() => [...(_cache[24] || (_cache[24] = [
+                                    default: _withCtx(() => [...(_cache[28] || (_cache[28] = [
                                       _createTextVNode("已追踪", -1)
                                     ]))]),
                                     _: 1
@@ -845,7 +991,7 @@ return (_ctx, _cache) => {
                                     variant: "text",
                                     onClick: $event => (addShow(item, 1))
                                   }, {
-                                    default: _withCtx(() => [...(_cache[25] || (_cache[25] = [
+                                    default: _withCtx(() => [...(_cache[29] || (_cache[29] = [
                                       _createTextVNode("加入", -1)
                                     ]))]),
                                     _: 1
@@ -880,9 +1026,9 @@ return (_ctx, _cache) => {
                 _createVNode(_component_VSpacer),
                 _createVNode(_component_VBtn, {
                   variant: "text",
-                  onClick: _cache[7] || (_cache[7] = $event => (searchOpen.value = false))
+                  onClick: _cache[10] || (_cache[10] = $event => (searchOpen.value = false))
                 }, {
-                  default: _withCtx(() => [...(_cache[26] || (_cache[26] = [
+                  default: _withCtx(() => [...(_cache[30] || (_cache[30] = [
                     _createTextVNode("关闭", -1)
                   ]))]),
                   _: 1
@@ -898,7 +1044,7 @@ return (_ctx, _cache) => {
     }, 8, ["modelValue"]),
     _createVNode(_component_VDialog, {
       modelValue: detailOpen.value,
-      "onUpdate:modelValue": _cache[10] || (_cache[10] = $event => ((detailOpen).value = $event)),
+      "onUpdate:modelValue": _cache[13] || (_cache[13] = $event => ((detailOpen).value = $event)),
       "max-width": "640"
     }, {
       default: _withCtx(() => [
@@ -914,7 +1060,7 @@ return (_ctx, _cache) => {
               default: _withCtx(() => [
                 _createVNode(_component_VTable, { density: "compact" }, {
                   default: _withCtx(() => [
-                    _cache[27] || (_cache[27] = _createElementVNode("thead", null, [
+                    _cache[31] || (_cache[31] = _createElementVNode("thead", null, [
                       _createElementVNode("tr", null, [
                         _createElementVNode("th", null, "季"),
                         _createElementVNode("th", null, "TMDB 集数"),
@@ -957,7 +1103,7 @@ return (_ctx, _cache) => {
                       variant: "tonal",
                       density: "compact"
                     }, {
-                      default: _withCtx(() => [...(_cache[28] || (_cache[28] = [
+                      default: _withCtx(() => [...(_cache[32] || (_cache[32] = [
                         _createTextVNode(" 未取到季信息。 ", -1)
                       ]))]),
                       _: 1
@@ -971,9 +1117,9 @@ return (_ctx, _cache) => {
                 _createVNode(_component_VSpacer),
                 _createVNode(_component_VBtn, {
                   variant: "text",
-                  onClick: _cache[9] || (_cache[9] = $event => (detailOpen.value = false))
+                  onClick: _cache[12] || (_cache[12] = $event => (detailOpen.value = false))
                 }, {
-                  default: _withCtx(() => [...(_cache[29] || (_cache[29] = [
+                  default: _withCtx(() => [...(_cache[33] || (_cache[33] = [
                     _createTextVNode("关闭", -1)
                   ]))]),
                   _: 1
@@ -989,15 +1135,15 @@ return (_ctx, _cache) => {
     }, 8, ["modelValue"]),
     _createVNode(_component_VDialog, {
       modelValue: calendarOpen.value,
-      "onUpdate:modelValue": _cache[15] || (_cache[15] = $event => ((calendarOpen).value = $event)),
-      "max-width": "1040",
+      "onUpdate:modelValue": _cache[18] || (_cache[18] = $event => ((calendarOpen).value = $event)),
+      "max-width": "1560",
       scrollable: ""
     }, {
       default: _withCtx(() => [
         _createVNode(_component_VCard, null, {
           default: _withCtx(() => [
             _createVNode(_component_VCardItem, { class: "py-2" }, {
-              title: _withCtx(() => [...(_cache[30] || (_cache[30] = [
+              title: _withCtx(() => [...(_cache[34] || (_cache[34] = [
                 _createElementVNode("span", { class: "text-subtitle-1" }, "播出日历", -1)
               ]))]),
               append: _withCtx(() => [
@@ -1006,22 +1152,22 @@ return (_ctx, _cache) => {
                     icon: "mdi-chevron-left",
                     variant: "text",
                     size: "small",
-                    onClick: _cache[11] || (_cache[11] = $event => (shiftCalendar(-1)))
+                    onClick: _cache[14] || (_cache[14] = $event => (shiftCalendar(-1)))
                   }),
                   _createElementVNode("div", _hoisted_13, _toDisplayString(calendarTitle.value), 1),
                   _createVNode(_component_VBtn, {
                     icon: "mdi-chevron-right",
                     variant: "text",
                     size: "small",
-                    onClick: _cache[12] || (_cache[12] = $event => (shiftCalendar(1)))
+                    onClick: _cache[15] || (_cache[15] = $event => (shiftCalendar(1)))
                   }),
                   _createVNode(_component_VBtn, {
                     size: "small",
                     variant: "tonal",
                     class: "ms-2",
-                    onClick: _cache[13] || (_cache[13] = $event => (loadCalendar('')))
+                    onClick: _cache[16] || (_cache[16] = $event => (loadCalendar('')))
                   }, {
-                    default: _withCtx(() => [...(_cache[31] || (_cache[31] = [
+                    default: _withCtx(() => [...(_cache[35] || (_cache[35] = [
                       _createTextVNode(" 今天 ", -1)
                     ]))]),
                     _: 1
@@ -1070,26 +1216,26 @@ return (_ctx, _cache) => {
                         _createElementVNode("div", _hoisted_18, [
                           (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(visibleEvents(cell), (event) => {
                             return (_openBlock(), _createElementBlock("div", {
-                              key: `${cell.date}-${event.tmdbid}`,
+                              key: `${cell.date}-${event.tmdbid}-${event.episode_start}`,
                               class: "autorenew-cal-event",
-                              title: `${event.title} · S${event.season} · ${event.status_label}`,
+                              title: calendarEventTitle(event),
                               onClick: $event => (openCalendarEvent(event))
                             }, [
                               _createVNode(_component_VImg, {
                                 src: event.poster_url || '',
-                                width: "20",
-                                height: "30",
+                                width: "24",
+                                height: "36",
                                 cover: "",
                                 class: "autorenew-cal-poster bg-grey-darken-3"
                               }, null, 8, ["src"]),
                               _createElementVNode("div", _hoisted_20, [
                                 _createElementVNode("div", _hoisted_21, _toDisplayString(event.title), 1),
-                                _createElementVNode("div", _hoisted_22, "S" + _toDisplayString(event.season), 1)
+                                _createElementVNode("div", _hoisted_22, _toDisplayString(event.label || `S${event.season}`), 1)
                               ])
                             ], 8, _hoisted_19))
                           }), 128)),
                           (cell.events.length > CAL_MAX_PER_DAY)
-                            ? (_openBlock(), _createElementBlock("div", _hoisted_23, " +" + _toDisplayString(cell.events.length - CAL_MAX_PER_DAY) + " 部 ", 1))
+                            ? (_openBlock(), _createElementBlock("div", _hoisted_23, " +" + _toDisplayString(cell.events.length - CAL_MAX_PER_DAY) + " 条 ", 1))
                             : _createCommentVNode("", true)
                         ])
                       ], 2))
@@ -1111,7 +1257,7 @@ return (_ctx, _cache) => {
                       _createElementVNode("div", _hoisted_26, [
                         (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(calendarUpcoming.value, (event) => {
                           return (_openBlock(), _createElementBlock("div", {
-                            key: `up-${event.date}-${event.tmdbid}`,
+                            key: `up-${event.date}-${event.tmdbid}-${event.episode_start}`,
                             class: "autorenew-cal-upcoming",
                             onClick: $event => (openCalendarEvent(event))
                           }, [
@@ -1124,7 +1270,7 @@ return (_ctx, _cache) => {
                             }, null, 8, ["src"]),
                             _createElementVNode("div", _hoisted_28, [
                               _createElementVNode("div", _hoisted_29, _toDisplayString(event.title), 1),
-                              _createElementVNode("div", _hoisted_30, _toDisplayString(_unref(formatDate)(event.date)) + " · S" + _toDisplayString(event.season), 1)
+                              _createElementVNode("div", _hoisted_30, _toDisplayString(_unref(formatDate)(event.date)) + " · " + _toDisplayString(event.label || `S${event.season}`), 1)
                             ])
                           ], 8, _hoisted_27))
                         }), 128))
@@ -1139,9 +1285,9 @@ return (_ctx, _cache) => {
                 _createVNode(_component_VSpacer),
                 _createVNode(_component_VBtn, {
                   variant: "text",
-                  onClick: _cache[14] || (_cache[14] = $event => (calendarOpen.value = false))
+                  onClick: _cache[17] || (_cache[17] = $event => (calendarOpen.value = false))
                 }, {
-                  default: _withCtx(() => [...(_cache[32] || (_cache[32] = [
+                  default: _withCtx(() => [...(_cache[36] || (_cache[36] = [
                     _createTextVNode("关闭", -1)
                   ]))]),
                   _: 1
@@ -1157,7 +1303,7 @@ return (_ctx, _cache) => {
     }, 8, ["modelValue"]),
     _createVNode(_component_VDialog, {
       modelValue: importOpen.value,
-      "onUpdate:modelValue": _cache[20] || (_cache[20] = $event => ((importOpen).value = $event)),
+      "onUpdate:modelValue": _cache[23] || (_cache[23] = $event => ((importOpen).value = $event)),
       "max-width": "720",
       scrollable: ""
     }, {
@@ -1165,7 +1311,7 @@ return (_ctx, _cache) => {
         _createVNode(_component_VCard, null, {
           default: _withCtx(() => [
             _createVNode(_component_VCardTitle, { class: "text-subtitle-1" }, {
-              default: _withCtx(() => [...(_cache[33] || (_cache[33] = [
+              default: _withCtx(() => [...(_cache[37] || (_cache[37] = [
                 _createTextVNode("从媒体库导入", -1)
               ]))]),
               _: 1
@@ -1178,7 +1324,7 @@ return (_ctx, _cache) => {
                   density: "compact",
                   class: "mb-3"
                 }, {
-                  default: _withCtx(() => [...(_cache[34] || (_cache[34] = [
+                  default: _withCtx(() => [...(_cache[38] || (_cache[38] = [
                     _createTextVNode(" 只影响本插件的追踪名单，", -1),
                     _createElementVNode("strong", null, "不会创建任何 MoviePilot 订阅", -1),
                     _createTextVNode("。 ", -1)
@@ -1188,7 +1334,7 @@ return (_ctx, _cache) => {
                 _createVNode(_component_VSwitch, {
                   modelValue: importSync.value,
                   "onUpdate:modelValue": [
-                    _cache[16] || (_cache[16] = $event => ((importSync).value = $event)),
+                    _cache[19] || (_cache[19] = $event => ((importSync).value = $event)),
                     loadImportPreview
                   ],
                   label: "先强制同步媒体库再比对",
@@ -1198,10 +1344,10 @@ return (_ctx, _cache) => {
                   disabled: importBusy.value
                 }, null, 8, ["modelValue", "disabled"]),
                 _createElementVNode("div", _hoisted_31, [
-                  _cache[36] || (_cache[36] = _createTextVNode(" 宿主每 6 小时自动同步一次媒体库；打开这项会立刻跑一遍全库同步（较慢）， 这样「已从库里删除的剧」也能马上被识别出来。 ", -1)),
+                  _cache[40] || (_cache[40] = _createTextVNode(" 宿主每 6 小时自动同步一次媒体库；打开这项会立刻跑一遍全库同步（较慢）， 这样「已从库里删除的剧」也能马上被识别出来。 ", -1)),
                   (importPreview.value?.last_sync)
                     ? (_openBlock(), _createElementBlock(_Fragment, { key: 0 }, [
-                        _cache[35] || (_cache[35] = _createElementVNode("br", null, null, -1)),
+                        _cache[39] || (_cache[39] = _createElementVNode("br", null, null, -1)),
                         _createTextVNode("当前缓存最近更新：" + _toDisplayString(importPreview.value.last_sync), 1)
                       ], 64))
                     : _createCommentVNode("", true)
@@ -1238,7 +1384,7 @@ return (_ctx, _cache) => {
                                       density: "compact",
                                       "hide-details": "",
                                       color: "primary",
-                                      onClick: _cache[17] || (_cache[17] = _withModifiers(() => {}, ["stop"])),
+                                      onClick: _cache[20] || (_cache[20] = _withModifiers(() => {}, ["stop"])),
                                       "onUpdate:modelValue": $event => (toggleSelected(addSelected.value, item.tmdbid))
                                     }, null, 8, ["model-value", "onUpdate:modelValue"])
                                   ]),
@@ -1255,13 +1401,13 @@ return (_ctx, _cache) => {
                             density: "compact",
                             class: "mb-3"
                           }, {
-                            default: _withCtx(() => [...(_cache[37] || (_cache[37] = [
+                            default: _withCtx(() => [...(_cache[41] || (_cache[41] = [
                               _createTextVNode(" 没有需要新增的剧。 ", -1)
                             ]))]),
                             _: 1
                           })),
                       _createElementVNode("div", _hoisted_34, "将移除 " + _toDisplayString(importPreview.value.removed.length) + " 部", 1),
-                      _cache[39] || (_cache[39] = _createElementVNode("div", { class: "text-caption text-medium-emphasis mb-2" }, " 只列出「来源 = 媒体库导入」且现在库里已找不到的剧；手动添加、订阅同步进来的永不在此列。 ", -1)),
+                      _cache[43] || (_cache[43] = _createElementVNode("div", { class: "text-caption text-medium-emphasis mb-2" }, " 只列出「来源 = 媒体库导入」且现在库里已找不到的剧；手动添加、订阅同步进来的永不在此列。 ", -1)),
                       (importPreview.value.removed.length)
                         ? (_openBlock(), _createBlock(_component_VList, {
                             key: 2,
@@ -1280,7 +1426,7 @@ return (_ctx, _cache) => {
                                       density: "compact",
                                       "hide-details": "",
                                       color: "error",
-                                      onClick: _cache[18] || (_cache[18] = _withModifiers(() => {}, ["stop"])),
+                                      onClick: _cache[21] || (_cache[21] = _withModifiers(() => {}, ["stop"])),
                                       "onUpdate:modelValue": $event => (toggleSelected(removeSelected.value, item.tmdbid))
                                     }, null, 8, ["model-value", "onUpdate:modelValue"])
                                   ]),
@@ -1296,7 +1442,7 @@ return (_ctx, _cache) => {
                             variant: "tonal",
                             density: "compact"
                           }, {
-                            default: _withCtx(() => [...(_cache[38] || (_cache[38] = [
+                            default: _withCtx(() => [...(_cache[42] || (_cache[42] = [
                               _createTextVNode(" 没有需要移除的剧。 ", -1)
                             ]))]),
                             _: 1
@@ -1312,9 +1458,9 @@ return (_ctx, _cache) => {
                 _createVNode(_component_VBtn, {
                   variant: "text",
                   disabled: importBusy.value,
-                  onClick: _cache[19] || (_cache[19] = $event => (importOpen.value = false))
+                  onClick: _cache[22] || (_cache[22] = $event => (importOpen.value = false))
                 }, {
-                  default: _withCtx(() => [...(_cache[40] || (_cache[40] = [
+                  default: _withCtx(() => [...(_cache[44] || (_cache[44] = [
                     _createTextVNode("取消", -1)
                   ]))]),
                   _: 1
@@ -1326,7 +1472,7 @@ return (_ctx, _cache) => {
                   disabled: !importPreview.value,
                   onClick: applyImport
                 }, {
-                  default: _withCtx(() => [...(_cache[41] || (_cache[41] = [
+                  default: _withCtx(() => [...(_cache[45] || (_cache[45] = [
                     _createTextVNode(" 执行导入 ", -1)
                   ]))]),
                   _: 1
@@ -1345,6 +1491,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-60d11f02"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-ef1c9f80"]]);
 
 export { AppPage as default };

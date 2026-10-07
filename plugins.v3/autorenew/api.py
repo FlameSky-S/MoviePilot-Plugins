@@ -87,7 +87,21 @@ def build_api_routes(owner: Any) -> List[Dict[str, Any]]:
             "endpoint": owner.api_calendar,
             "methods": ["GET"],
             "auth": "bear",
-            "summary": "未来播出日历",
+            "summary": "未来播出日历（精确到集）",
+        },
+        {
+            "path": "/config",
+            "endpoint": owner.api_get_config,
+            "methods": ["GET"],
+            "auth": "bear",
+            "summary": "读取本插件配置（页面内设置入口用）",
+        },
+        {
+            "path": "/config",
+            "endpoint": owner.api_save_config,
+            "methods": ["POST"],
+            "auth": "bear",
+            "summary": "保存本插件配置并立即生效",
         },
         {
             "path": "/rule_options",

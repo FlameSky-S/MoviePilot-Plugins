@@ -6,6 +6,8 @@
 import { computed, onMounted, ref } from 'vue'
 import { createAutoRenewApi } from '../api/autoRenewApi'
 import { errorMessage, formatDate, seasonLabel, unwrapResponse } from '../utils/formatters'
+// 页面内的「设置」按钮直接复用设置弹窗那个表单组件（同一份代码，不会两处漂移）
+import ConfigPanel from './Config.vue'
 
 const props = defineProps({
   api: { type: Object, default: () => ({}) },
@@ -18,7 +20,7 @@ const pluginBase = computed(() => `plugin/${props.pluginId || 'AutoRenew'}`)
 const pluginApi = computed(() => createAutoRenewApi(props.api, pluginBase))
 
 const SORTS = [
-  { value: 'next_airing', title: 'Next Airing' },
+  { value: 'next_airing', title: '按播出时间' },
   { value: 'recent', title: '最近添加' },
 ]
 
@@ -41,7 +43,7 @@ const calendarGrid = ref(null)
 const calendarUpcoming = ref([])
 const calendarUpcomingTotal = ref(0)
 const calendarLoading = ref(false)
-const CAL_MAX_PER_DAY = 3
+const CAL_MAX_PER_DAY = 4
 
 const detailOpen = ref(false)
 const detail = ref(null)
@@ -56,10 +58,25 @@ const removeSelected = ref([])
 
 const refreshingEnded = ref(false)
 
+// 页面内「设置」：直接渲染 Config.vue（与插件列表里的设置弹窗同一份表单）
+const settingsOpen = ref(false)
+const settingsConfig = ref(null)
+const settingsLoading = ref(false)
+
 const activeShows = computed(() => shows.value.filter(show => !show.terminated))
 const endedShows = computed(() => shows.value.filter(show => show.terminated))
 /** 全局「仅提醒模式」时，单剧的续订开关没有任何作用 —— UI 要禁用而不是假装能点。 */
 const reminderOnly = computed(() => !!status.value && !status.value.auto_subscribe)
+
+/** cron 的自然语言说明由后端算好（这样它能进单测），前端只负责展示。 */
+const cronTooltip = computed(() => {
+  if (!status.value) return ''
+  const text = String(status.value.cron_text || '').trim()
+  const expr = status.value.cron
+  if (!text) return `检测周期（crontab）：${expr}`
+  if (text.startsWith('分钟 ')) return `检测周期：${text}（未识别的写法，按字段直译）`
+  return `检测周期：${text}（crontab：${expr}）`
+})
 
 async function load() {
   loading.value = true
@@ -80,6 +97,33 @@ async function load() {
 
 async function changeSort() {
   await load()
+}
+
+/** 打开页面内设置弹窗：先取回当前配置再挂载表单（表单在 onMounted 里读 initial-config）。 */
+async function openSettings() {
+  settingsLoading.value = true
+  error.value = ''
+  try {
+    settingsConfig.value = unwrapResponse(await pluginApi.value.config()) || {}
+    settingsOpen.value = true
+  } catch (err) {
+    error.value = errorMessage(err)
+  } finally {
+    settingsLoading.value = false
+  }
+}
+
+/** 保存：后端 update_config + init_plugin 立即生效，不需要宿主重载。 */
+async function saveSettings(payload) {
+  try {
+    const res = unwrapResponse(await pluginApi.value.saveConfig(payload))
+    settingsOpen.value = false
+    settingsConfig.value = null
+    message.value = res?.message || '设置已保存并生效'
+    await load()
+  } catch (err) {
+    error.value = errorMessage(err)
+  }
 }
 
 async function toggleRenew(show) {
@@ -268,6 +312,15 @@ function visibleEvents(cell) {
   return (cell.events || []).slice(0, CAL_MAX_PER_DAY)
 }
 
+/** 日历事件的 hover 提示：剧名 · 集号 · 状态 + 集标题（有就列出来）。 */
+function calendarEventTitle(event) {
+  const label = event.label || `S${event.season}`
+  const head = `${event.title} · ${label} · ${event.status_label}`
+  const names = (event.episode_names || []).filter(Boolean)
+  if (!names.length) return head
+  return `${head}\n${names.join(' / ')}`
+}
+
 function openCalendarEvent(event) {
   const show = shows.value.find(item => item.tmdbid === event.tmdbid)
   calendarOpen.value = false
@@ -328,19 +381,38 @@ defineExpose({ load, loading })
       </VAlert>
 
       <div class="d-flex align-center flex-wrap ga-2 mb-3">
+        <!-- 「追踪 X 部」只算正在追踪的（不含已完结/已砍区），与下方卡片数一致 -->
         <VChip v-if="status" size="small" variant="tonal" prepend-icon="mdi-television">
-          追踪 {{ status.tracked }} 部
+          追踪 {{ status.tracking ?? status.tracked }} 部
         </VChip>
-        <VChip v-if="status" size="small" variant="tonal" prepend-icon="mdi-clock-outline">
-          {{ status.cron }}
+        <VChip
+          v-if="status"
+          size="small"
+          variant="tonal"
+          color="primary"
+          prepend-icon="mdi-autorenew"
+        >
+          自动续订 {{ status.auto_renew_on ?? 0 }} 部
         </VChip>
+        <VTooltip v-if="status" :text="cronTooltip" location="bottom" max-width="360">
+          <template #activator="{ props: cronProps }">
+            <VChip
+              v-bind="cronProps"
+              size="small"
+              variant="tonal"
+              prepend-icon="mdi-clock-outline"
+            >
+              {{ status.cron }}
+            </VChip>
+          </template>
+        </VTooltip>
         <VChip
           v-if="status"
           size="small"
           :color="status.auto_subscribe ? 'success' : 'warning'"
           variant="tonal"
         >
-          {{ status.auto_subscribe ? '自动建订阅' : '仅提醒模式' }}
+          {{ status.auto_subscribe ? '自动续订已开启' : '仅提醒模式' }}
         </VChip>
         <VSpacer />
         <VSelect
@@ -352,13 +424,38 @@ defineExpose({ load, loading })
           style="max-width: 180px"
           @update:model-value="changeSort"
         />
-        <VBtn
-          icon="mdi-refresh"
-          variant="text"
-          size="small"
-          :loading="loading"
-          @click="load"
-        />
+        <VTooltip
+          text="重新读取追踪名单与插件状态（只读，不访问 TMDB）"
+          location="bottom"
+          max-width="320"
+        >
+          <template #activator="{ props: reloadProps }">
+            <VBtn
+              v-bind="reloadProps"
+              icon="mdi-refresh"
+              variant="text"
+              size="small"
+              :loading="loading"
+              @click="load"
+            />
+          </template>
+        </VTooltip>
+        <VTooltip
+          text="打开插件设置：续订规则、检测周期、通知开关"
+          location="bottom"
+          max-width="320"
+        >
+          <template #activator="{ props: settingsProps }">
+            <VBtn
+              v-bind="settingsProps"
+              icon="mdi-cog-outline"
+              variant="text"
+              size="small"
+              :loading="settingsLoading"
+              @click="openSettings"
+            />
+          </template>
+        </VTooltip>
       </div>
 
       <VAlert v-if="!loading && !shows.length" type="info" variant="tonal">
@@ -392,7 +489,13 @@ defineExpose({ load, loading })
                 {{ show.title }}
               </div>
               <div class="d-flex align-center flex-wrap ga-1 mt-1">
-                <VChip size="x-small" variant="tonal">{{ show.status_label }}</VChip>
+                <VChip
+                  size="x-small"
+                  variant="tonal"
+                  :title="show.tmdb_status ? `TMDB 状态：${show.tmdb_status}` : ''"
+                >
+                  {{ show.status_label }}
+                </VChip>
                 <VChip size="x-small" variant="tonal" color="primary">
                   {{ seasonLabel(show.season) }}
                 </VChip>
@@ -485,7 +588,13 @@ defineExpose({ load, loading })
               <VCardText class="pa-2">
                 <div class="text-body-2 text-truncate">{{ show.title }}</div>
                 <div class="d-flex align-center flex-wrap ga-1 mt-1">
-                  <VChip size="x-small" variant="tonal">{{ show.status_label }}</VChip>
+                  <VChip
+                    size="x-small"
+                    variant="tonal"
+                    :title="show.tmdb_status ? `TMDB 状态：${show.tmdb_status}` : ''"
+                  >
+                    {{ show.status_label }}
+                  </VChip>
                   <!-- x = 磁盘上有的季数，y = 总季数（都不含特别季 S0） -->
                   <VChip
                     v-if="show.total_seasons"
@@ -542,6 +651,31 @@ defineExpose({ load, loading })
         </VMenu>
       </div>
     </Teleport>
+
+    <!-- 页面内「设置」：复用 Config.vue（与插件列表里的设置弹窗同一份表单） -->
+    <VDialog v-model="settingsOpen" max-width="760" scrollable>
+      <VCard>
+        <VCardItem class="py-2">
+          <template #title>
+            <span class="text-subtitle-1">自动续订 · 设置</span>
+          </template>
+          <template #append>
+            <VBtn icon="mdi-close" variant="text" size="small" @click="settingsOpen = false" />
+          </template>
+        </VCardItem>
+        <VDivider />
+        <VCardText class="pa-4">
+          <ConfigPanel
+            v-if="settingsOpen && settingsConfig"
+            :initial-config="settingsConfig"
+            :api="props.api"
+            :plugin-id="props.pluginId"
+            @save="saveSettings"
+            @close="settingsOpen = false"
+          />
+        </VCardText>
+      </VCard>
+    </VDialog>
 
     <!-- 搜索 / 添加 -->
     <VDialog v-model="searchOpen" max-width="720">
@@ -626,8 +760,8 @@ defineExpose({ load, loading })
       </VCard>
     </VDialog>
 
-    <!-- 播出日历：周一起始的月历网格（Sonarr 式） -->
-    <VDialog v-model="calendarOpen" max-width="1040" scrollable>
+    <!-- 播出日历：周一起始的月历网格（Sonarr 式），事件精确到集 -->
+    <VDialog v-model="calendarOpen" max-width="1560" scrollable>
       <VCard>
         <VCardItem class="py-2">
           <template #title>
@@ -692,25 +826,25 @@ defineExpose({ load, loading })
               <div class="autorenew-cal-events">
                 <div
                   v-for="event in visibleEvents(cell)"
-                  :key="`${cell.date}-${event.tmdbid}`"
+                  :key="`${cell.date}-${event.tmdbid}-${event.episode_start}`"
                   class="autorenew-cal-event"
-                  :title="`${event.title} · S${event.season} · ${event.status_label}`"
+                  :title="calendarEventTitle(event)"
                   @click="openCalendarEvent(event)"
                 >
                   <VImg
                     :src="event.poster_url || ''"
-                    width="20"
-                    height="30"
+                    width="24"
+                    height="36"
                     cover
                     class="autorenew-cal-poster bg-grey-darken-3"
                   />
                   <div class="autorenew-cal-eventtext">
                     <div class="autorenew-cal-eventtitle">{{ event.title }}</div>
-                    <div class="autorenew-cal-eventmeta">S{{ event.season }}</div>
+                    <div class="autorenew-cal-eventmeta">{{ event.label || `S${event.season}` }}</div>
                   </div>
                 </div>
                 <div v-if="cell.events.length > CAL_MAX_PER_DAY" class="autorenew-cal-more">
-                  +{{ cell.events.length - CAL_MAX_PER_DAY }} 部
+                  +{{ cell.events.length - CAL_MAX_PER_DAY }} 条
                 </div>
               </div>
             </div>
@@ -730,7 +864,7 @@ defineExpose({ load, loading })
             <div class="d-flex flex-wrap ga-2">
               <div
                 v-for="event in calendarUpcoming"
-                :key="`up-${event.date}-${event.tmdbid}`"
+                :key="`up-${event.date}-${event.tmdbid}-${event.episode_start}`"
                 class="autorenew-cal-upcoming"
                 @click="openCalendarEvent(event)"
               >
@@ -744,7 +878,7 @@ defineExpose({ load, loading })
                 <div class="autorenew-cal-eventtext">
                   <div class="autorenew-cal-eventtitle">{{ event.title }}</div>
                   <div class="autorenew-cal-eventmeta">
-                    {{ formatDate(event.date) }} · S{{ event.season }}
+                    {{ formatDate(event.date) }} · {{ event.label || `S${event.season}` }}
                   </div>
                 </div>
               </div>
@@ -897,14 +1031,14 @@ defineExpose({ load, loading })
 }
 
 .autorenew-cal-week {
-  margin-bottom: 4px;
+  margin-bottom: 6px;
 }
 
 .autorenew-cal-weekday {
   text-align: center;
-  font-size: 0.72rem;
+  font-size: 0.84rem;
   letter-spacing: 0.08em;
-  padding: 2px 0;
+  padding: 4px 0;
   opacity: 0.65;
 }
 
@@ -914,13 +1048,13 @@ defineExpose({ load, loading })
 }
 
 .autorenew-cal-cell {
-  min-height: 88px;
-  padding: 4px 5px 5px;
+  min-height: 124px;
+  padding: 6px 7px 7px;
   border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: 6px;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   overflow: hidden;
   background: rgba(var(--v-theme-surface), 0.35);
 }
@@ -939,7 +1073,7 @@ defineExpose({ load, loading })
 }
 
 .autorenew-cal-daynum {
-  font-size: 0.72rem;
+  font-size: 0.86rem;
   line-height: 1.2;
   text-align: right;
   opacity: 0.85;
@@ -949,8 +1083,8 @@ defineExpose({ load, loading })
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 19px;
-  height: 19px;
+  width: 23px;
+  height: 23px;
   border-radius: 50%;
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
@@ -960,16 +1094,16 @@ defineExpose({ load, loading })
 .autorenew-cal-events {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   overflow: hidden;
   min-height: 0;
 }
 
 .autorenew-cal-event {
   display: flex;
-  gap: 4px;
+  gap: 5px;
   align-items: center;
-  padding: 1px 2px;
+  padding: 2px 3px;
   border-radius: 4px;
   cursor: pointer;
   transition: background-color 0.15s;
@@ -989,31 +1123,32 @@ defineExpose({ load, loading })
 }
 
 .autorenew-cal-eventtitle {
-  font-size: 0.7rem;
-  line-height: 1.15;
+  font-size: 0.8rem;
+  line-height: 1.2;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .autorenew-cal-eventmeta {
-  font-size: 0.62rem;
-  line-height: 1.1;
-  opacity: 0.62;
+  font-size: 0.72rem;
+  line-height: 1.15;
+  opacity: 0.68;
+  font-variant-numeric: tabular-nums;
 }
 
 .autorenew-cal-more {
-  font-size: 0.62rem;
+  font-size: 0.72rem;
   opacity: 0.62;
-  padding-left: 2px;
+  padding-left: 3px;
 }
 
 .autorenew-cal-upcoming {
   display: flex;
-  gap: 6px;
+  gap: 7px;
   align-items: center;
-  max-width: 236px;
-  padding: 4px 8px 4px 4px;
+  max-width: 300px;
+  padding: 5px 10px 5px 5px;
   border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: 6px;
   cursor: pointer;

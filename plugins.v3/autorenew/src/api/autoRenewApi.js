@@ -58,6 +58,14 @@ export function createAutoRenewApi(api, pluginBase) {
     ruleOptions() {
       return get('/rule_options')
     },
+    /** 读取本插件配置（页面内「设置」入口回显用）。 */
+    config() {
+      return get('/config')
+    },
+    /** 保存本插件配置：后端 update_config + 立即 init_plugin 生效。 */
+    saveConfig(payload) {
+      return post('/config', payload)
+    },
     check() {
       return post('/check', {})
     },

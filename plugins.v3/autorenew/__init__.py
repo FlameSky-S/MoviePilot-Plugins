@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -27,7 +28,8 @@ from app.sdk.plugin import _PluginBase
 from app.sdk import queries as sdk_queries
 
 from .api import build_api_routes
-from .core.calendarview import build_month_grid
+from .core.calendarview import build_month_grid, merge_day_episodes
+from .core.crontext import describe_cron
 from .core.library import diff_watchlist, library_candidates
 from .core.models import (
     SOURCE_LABELS,
@@ -51,6 +53,12 @@ from .core.store import WatchlistStore
 from .core.tmdb import TmdbSeasonSource
 
 DEFAULT_CRON = "0 */6 * * *"
+
+# 「播出日历」里每一集的缓存时长。宿主的 TmdbApi.get_tv_season_detail **没有缓存**，
+# 而翻月份 / 刷新页面都会重新走一遍日历接口 —— 不缓存就是每次几十个 TMDB 请求。
+EPISODE_CACHE_TTL = 3 * 3600
+# 一部剧最多看几季的集表（从已追踪季起算）。防「追踪 S1、实际 S12」这类极端情况炸请求。
+CAL_MAX_SEASONS = 6
 
 # 「续订规则」里画质/分辨率的候选（宿主的合法取值，界面只是给提示，允手填）。
 RESOLUTION_CHOICES = ("8K", "4K", "1080P", "720P", "480P")
@@ -79,7 +87,7 @@ class AutoRenew(_PluginBase):
     plugin_name = "自动续订"
     plugin_desc = "长期追踪电视剧：TMDB 上出现新一季就自动建订阅。提供 Sonarr 式状态标签、季进度与播出日历。"
     plugin_icon = "AutoRenew.png"
-    plugin_version = "1.0.7"
+    plugin_version = "1.0.8"
     plugin_author = "FlameSky-S"
     author_url = "https://github.com/FlameSky-S"
     plugin_config_prefix = "autorenew_"
@@ -99,6 +107,10 @@ class AutoRenew(_PluginBase):
     _rule_defaults: Optional[Dict[str, Any]] = None
     _last_run: Optional[str] = None
     _last_result: Optional[Dict[str, Any]] = None
+    _config: Dict[str, Any] = {}
+    _cron_text: str = ""
+    # {(tmdbid, season): (写入时间, 集列表)} —— 见 EPISODE_CACHE_TTL
+    _episode_cache: Dict[Tuple[int, int], Tuple[float, List[Dict[str, Any]]]] = {}
 
     # ------------------------------------------------------------ 生命周期
     def init_plugin(self, config: Optional[dict] = None) -> None:
@@ -115,6 +127,10 @@ class AutoRenew(_PluginBase):
 
         self._store = WatchlistStore(self.get_data, self.save_data)
         self._tmdb = TmdbSeasonSource()
+        # 原样留一份配置：设置入口要在页面里回显，POST /config 也要拿它做整份覆盖
+        self._config = dict(config)
+        self._cron_text = describe_cron(self._cron)
+        self._episode_cache = {}
         # 续订规则第二级：插件设置（空项会被 rule_payload 丢掉，即「交给宿主全局」）
         self._rule_defaults = rule_payload(config)
         # 上次检测时间持久化在 plugindata 里（宿主重载会重建插件实例）
@@ -671,18 +687,56 @@ class AutoRenew(_PluginBase):
     # ------------------------------------------------------------- API 实现
     def api_status(self) -> Dict[str, Any]:
         shows = self._store.list_all() if self._store else []
+        active = [s for s in shows if not is_terminal(s.tmdb_status)]
         return {
             "enabled": self._enabled,
             "auto_subscribe": self._auto_subscribe,
             "notify": self._notify,
             "cron": self._cron,
+            # cron 的自然语言说明（后端算，前端只展示 —— 这样才能进单测）
+            "cron_text": self._cron_text or describe_cron(self._cron),
             "max_actions_per_run": self._max_actions,
+            # tracked 保留为「名单总数」；tracking 是「正在追踪」= 不含已完结/已砍
             "tracked": len(shows),
+            "tracking": len(active),
+            "auto_renew_on": sum(1 for s in active if s.auto_renew),
             "sources": self._store.sources() if self._store else {},
-            "terminated": sum(1 for s in shows if is_terminal(s.tmdb_status)),
+            "terminated": len(shows) - len(active),
             "last_run": self._last_run,
             "last_result": self._last_result,
         }
+
+    # ---------------------------------------------------- 设置页（页面内入口）
+    def api_get_config(self) -> Dict[str, Any]:
+        """页面右上「设置」按钮回显用：原样返回插件自己的配置。"""
+        return dict(self.get_config() or self._config or {})
+
+    def api_save_config(self, payload: dict = None) -> Dict[str, Any]:
+        """页面内保存设置。
+
+        走 `_PluginBase.update_config`（宿主官方入口，写 `plugininstance`），
+        再 `init_plugin` 让**当前实例**立刻用上新配置 —— 否则要等宿主下次重载，
+        用户会以为「保存了没生效」。顺带 `__maybe_kick_check` 会在
+        「自动建订阅」被打开时补跑一次检测。
+        """
+        payload = payload if isinstance(payload, dict) else {}
+        if not payload:
+            return {"success": False, "message": "配置为空"}
+        # 保留宿主侧的非表单字段（如 enabled 由列表页开关控制），整份覆盖前先合并
+        merged = dict(self.get_config() or {})
+        merged.update(payload)
+        try:
+            self.update_config(merged)
+        except Exception as err:  # noqa: BLE001
+            logger.error(f"自动续订：保存配置失败：{err}")
+            return {"success": False, "message": f"保存失败：{err}"}
+        try:
+            self.init_plugin(merged)
+        except Exception as err:  # noqa: BLE001
+            logger.error(f"自动续订：保存后重载配置失败：{err}")
+            return {"success": False, "message": f"已保存，但重载失败：{err}"}
+        logger.info("自动续订：设置已通过页面保存并生效")
+        return {"success": True, "message": "设置已保存并生效"}
 
     def api_list_shows(self, sort: str = "next_airing") -> List[Dict[str, Any]]:
         shows = self._store.list_all() if self._store else []
@@ -1065,11 +1119,41 @@ class AutoRenew(_PluginBase):
             "current": dict(self._rule_defaults or {}),
         }
 
-    def api_calendar(self, month: Optional[str] = None) -> Dict[str, Any]:
-        """播出日历：按月返回一张周一起始的月历网格，事件带海报。
+    def __season_episodes(self, tmdbid: int, season: int) -> List[Dict[str, Any]]:
+        """某一季的集表，带进程内缓存（宿主的 TMDB 客户端没有缓存）。"""
+        cache = getattr(self, "_episode_cache", None)
+        if cache is None:
+            cache = self._episode_cache = {}
+        key = (int(tmdbid), int(season))
+        hit = cache.get(key)
+        now = time.time()
+        if hit and now - hit[0] < EPISODE_CACHE_TTL:
+            return hit[1]
+        episodes = self._tmdb.season_episodes(tmdbid, season) if self._tmdb else []
+        cache[key] = (now, episodes)
+        return episodes
 
-        网格由纯函数 `build_month_grid` 排（含跨月补位格），前端只渲染不计算。
-        `month` 传 `YYYY-MM`，缺省或非法则回落到本月。
+    def __calendar_seasons(self, show: TrackedShow) -> List[int]:
+        """该剧哪些季的集表值得拉。
+
+        从「已追踪季」到「TMDB 最新季」；跨度太大时保留已追踪季 + 最新的几季
+        （一部剧的播出安排只可能落在最新那几季）。
+        """
+        first = max(1, int(show.season or 1))
+        last = max(first, int(show.latest_season or first))
+        seasons = list(range(first, last + 1))
+        if len(seasons) > CAL_MAX_SEASONS:
+            seasons = sorted({first, *seasons[-(CAL_MAX_SEASONS - 1):]})
+        return seasons
+
+    def api_calendar(self, month: Optional[str] = None) -> Dict[str, Any]:
+        """播出日历：按月返回一张周一起始的月历网格，**事件精确到集**。
+
+        - 数据源是 TMDB 的每季集表（不是 host 的 `next_episode_to_air`），
+          所以能看到 `S02E01`；同一天连播多集由 `merge_day_episodes` 合并成
+          `S02E01-E08`。
+        - 已完结 / 已砍的剧直接跳过：它们不会再有新集，没必要为它们拉 TMDB。
+        - 网格由纯函数 `build_month_grid` 排（含跨月补位格），前端只渲染不计算。
         """
         today = date.today()
         raw = str(month or "").strip()[:7]
@@ -1079,36 +1163,38 @@ class AutoRenew(_PluginBase):
             if 1 <= candidate <= 12:
                 year, month_no = int(raw[:4]), candidate
 
-        events: List[Dict[str, Any]] = []
-        upcoming: List[Dict[str, Any]] = []
+        raw_episodes: List[Dict[str, Any]] = []
         for show in self._store.list_all() if self._store else []:
-            air = show.next_episode_air_date
-            if not air:
+            if is_terminal(show.tmdb_status):
                 continue
-            key = str(air)[:10]
-            try:
-                air_date = date.fromisoformat(key)
-            except ValueError:
-                continue
-            item = {
-                "date": key,
-                "title": show.title,
-                "tmdbid": show.tmdbid,
-                "season": show.season,
-                "poster_url": self.__poster_url(show.poster_path),
-                "status_label": status_label(show.tmdb_status),
-            }
-            events.append(item)
-            if air_date >= today:
-                upcoming.append(item)
+            for season in self.__calendar_seasons(show):
+                for episode in self.__season_episodes(show.tmdbid, season):
+                    air = str(episode.get("air_date") or "")[:10]
+                    if len(air) != 10:
+                        continue
+                    raw_episodes.append(
+                        {
+                            "date": air,
+                            "title": show.title,
+                            "tmdbid": show.tmdbid,
+                            "season": int(episode.get("season") or season),
+                            "episode": episode.get("episode"),
+                            "name": episode.get("name"),
+                            "poster_url": self.__poster_url(show.poster_path),
+                            "status_label": status_label(show.tmdb_status),
+                        }
+                    )
 
+        events = merge_day_episodes(raw_episodes)
         grid = build_month_grid(year, month_no, events, today=today)
-        upcoming.sort(key=lambda event: (event["date"], event["title"]))
+        upcoming = [event for event in events if event["date"] >= today.isoformat()]
+        upcoming.sort(key=lambda event: (event["date"], event["title"], event["episode_start"]))
         return {
             "month": grid["month_key"],
             "grid": grid,
-            "upcoming": upcoming[:10],
-            "upcoming_total": len(upcoming),
+            "upcoming": upcoming[:12],
+            # 是「集」不是「事件」：S02E01-E08 算 8 集
+            "upcoming_total": sum(int(event.get("episode_count") or 1) for event in upcoming),
             "today": today.isoformat(),
         }
 

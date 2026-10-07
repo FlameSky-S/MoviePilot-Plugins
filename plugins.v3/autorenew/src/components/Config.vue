@@ -158,7 +158,15 @@ defineExpose({ load: loadStatus })
     <VCard variant="tonal" class="mb-3">
       <VCardText class="d-flex align-center flex-wrap ga-2 py-2">
         <VChip size="small" variant="tonal" prepend-icon="mdi-television">
-          追踪 {{ status?.tracked ?? '—' }} 部
+          追踪 {{ status?.tracking ?? status?.tracked ?? '—' }} 部
+        </VChip>
+        <VChip
+          v-if="status?.terminated"
+          size="small"
+          variant="tonal"
+          :title="'已完结 / 已砍，已停止轮询；合计 ' + (status?.tracked ?? 0) + ' 部'"
+        >
+          已完结 {{ status.terminated }} 部
         </VChip>
         <VChip size="small" variant="tonal" prepend-icon="mdi-clock-outline">
           {{ status?.cron || DEFAULT_CRON }}
@@ -169,7 +177,7 @@ defineExpose({ load: loadStatus })
           variant="tonal"
           :color="status.auto_subscribe ? 'success' : 'warning'"
         >
-          {{ status.auto_subscribe ? '自动建订阅' : '仅提醒模式' }}
+          {{ status.auto_subscribe ? '自动续订已开启' : '仅提醒模式' }}
         </VChip>
         <span v-if="status?.last_run" class="text-caption">上次检测 {{ status.last_run }}</span>
       </VCardText>
