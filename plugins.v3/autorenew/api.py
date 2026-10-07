@@ -90,6 +90,13 @@ def build_api_routes(owner: Any) -> List[Dict[str, Any]]:
             "summary": "未来播出日历",
         },
         {
+            "path": "/rule_options",
+            "endpoint": owner.api_rule_options,
+            "methods": ["GET"],
+            "auth": "bear",
+            "summary": "续订规则候选项（站点 / 过滤规则组 / 下载器）",
+        },
+        {
             "path": "/check",
             "endpoint": owner.api_check,
             "methods": ["POST"],

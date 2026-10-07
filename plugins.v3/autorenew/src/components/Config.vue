@@ -33,7 +33,23 @@ const DEFAULTS = {
   poll_cron: DEFAULT_CRON,
   max_actions_per_run: 5,
   show_sidebar_nav: true,
+  // 续订规则（第二级回退）：留空 = 交给 MoviePilot 全局默认
+  rules_quality: '',
+  rules_resolution: '',
+  rules_sites: [],
+  rules_filter_groups: [],
+  rules_downloader: '',
+  rules_include: '',
+  rules_exclude: '',
 }
+
+const RULE_TEXT_KEYS = [
+  'rules_quality',
+  'rules_resolution',
+  'rules_downloader',
+  'rules_include',
+  'rules_exclude',
+]
 
 /** 只认这几个键，脏值一律回落默认（宿主可能传缺字段或字符串过来）。 */
 function normalizeConfig(raw) {
@@ -49,12 +65,40 @@ function normalizeConfig(raw) {
   out.poll_cron = String(out.poll_cron || '').trim() || DEFAULT_CRON
   const limit = Number.parseInt(out.max_actions_per_run, 10)
   out.max_actions_per_run = Number.isFinite(limit) && limit > 0 ? limit : DEFAULTS.max_actions_per_run
+  // 站点/规则组存字符串数组（后端 rule_payload 会把站点转 int）
+  out.rules_sites = Array.isArray(out.rules_sites) ? out.rules_sites.map(String) : []
+  out.rules_filter_groups = Array.isArray(out.rules_filter_groups)
+    ? out.rules_filter_groups.map(String)
+    : []
+  for (const key of RULE_TEXT_KEYS) out[key] = String(out[key] ?? '').trim()
   return out
 }
 
 const localConfig = ref({ ...DEFAULTS })
 const status = ref(null)
 const error = ref('')
+/** 续订规则候选项，从宿主现读（站点 / 过滤规则组 / 下载器）。 */
+const ruleOptions = ref({ sites: [], filter_groups: [], downloaders: [], quality_choices: [], resolution_choices: [] })
+
+const siteItems = computed(() =>
+  (ruleOptions.value.sites || []).map(site => ({
+    title: `${site.name}${site.public ? ' · 公开站' : ''}`,
+    value: String(site.id),
+  })),
+)
+const groupItems = computed(() =>
+  (ruleOptions.value.filter_groups || []).map(name => ({ title: name, value: name })),
+)
+const downloaderItems = computed(() =>
+  (ruleOptions.value.downloaders || []).map(name => ({ title: name, value: name })),
+)
+/** 有多少条规则字段真的配了值（用来提示是否已接管默认）。 */
+const configuredRuleCount = computed(
+  () =>
+    RULE_TEXT_KEYS.filter(key => localConfig.value[key]).length +
+    (localConfig.value.rules_sites?.length ? 1 : 0) +
+    (localConfig.value.rules_filter_groups?.length ? 1 : 0),
+)
 
 const pluginBase = computed(() => `plugin/${props.pluginId || 'AutoRenew'}`)
 const pluginApi = computed(() => createAutoRenewApi(props.api, pluginBase))
@@ -69,6 +113,16 @@ async function loadStatus() {
     status.value = unwrapResponse(await pluginApi.value.status())
   } catch (err) {
     error.value = errorMessage(err)
+  }
+}
+
+async function loadRuleOptions() {
+  try {
+    const res = unwrapResponse(await pluginApi.value.ruleOptions())
+    if (res && typeof res === 'object') ruleOptions.value = { ...ruleOptions.value, ...res }
+  } catch (err) {
+    // 候选项拿不到不该挡住设置页，用户可以手填
+    error.value = `续订规则候选项加载失败（仍可手填）：${errorMessage(err)}`
   }
 }
 
@@ -89,6 +143,7 @@ function submit() {
 onMounted(() => {
   localConfig.value = normalizeConfig(props.initialConfig)
   loadStatus()
+  loadRuleOptions()
 })
 
 defineExpose({ load: loadStatus })
@@ -185,6 +240,108 @@ defineExpose({ load: loadStatus })
       </VCol>
     </VRow>
 
+    <VDivider class="my-3" />
+
+    <div class="d-flex align-center flex-wrap ga-2 mb-1">
+      <span class="text-subtitle-2">续订规则</span>
+      <VChip size="x-small" variant="tonal" :color="configuredRuleCount ? 'success' : 'grey'">
+        {{ configuredRuleCount ? `已配 ${configuredRuleCount} 项` : '全部跟随 MoviePilot 全局' }}
+      </VChip>
+    </div>
+    <div class="text-caption text-medium-emphasis mb-2">
+      新建订阅按三级回退取值：<strong>该剧已有订阅的参数 → 这里的设置 → MoviePilot 全局默认</strong>。
+      留空的项目<strong>不写进订阅</strong>，由 MoviePilot 用自己的全局默认兜底（当前实测全局：
+      过滤规则组 <code>电影 / 电视剧</code>、订阅站点用「订阅设置」里的范围、不开洗版）。
+    </div>
+
+    <VRow dense>
+      <VCol cols="12" md="6">
+        <VSelect
+          v-model="localConfig.rules_filter_groups"
+          :items="groupItems"
+          label="过滤规则组"
+          multiple
+          chips
+          closable-chips
+          density="compact"
+          variant="outlined"
+          hide-details
+          :menu-props="{ maxHeight: 320 }"
+        />
+      </VCol>
+      <VCol cols="12" md="6">
+        <VSelect
+          v-model="localConfig.rules_sites"
+          :items="siteItems"
+          label="订阅站点"
+          multiple
+          chips
+          closable-chips
+          density="compact"
+          variant="outlined"
+          hide-details
+          :menu-props="{ maxHeight: 320 }"
+        />
+      </VCol>
+    </VRow>
+
+    <VRow dense class="mt-1">
+      <VCol cols="12" md="3">
+        <VSelect
+          v-model="localConfig.rules_downloader"
+          :items="downloaderItems"
+          label="下载器"
+          clearable
+          density="compact"
+          variant="outlined"
+          hide-details
+        />
+      </VCol>
+      <VCol cols="12" md="3">
+        <VCombobox
+          v-model="localConfig.rules_resolution"
+          :items="ruleOptions.resolution_choices || []"
+          label="分辨率"
+          clearable
+          density="compact"
+          variant="outlined"
+          hide-details
+        />
+      </VCol>
+      <VCol cols="12" md="3">
+        <VCombobox
+          v-model="localConfig.rules_quality"
+          :items="ruleOptions.quality_choices || []"
+          label="画质"
+          clearable
+          density="compact"
+          variant="outlined"
+          hide-details
+        />
+      </VCol>
+      <VCol cols="12" md="3">
+        <VTextField
+          v-model="localConfig.rules_include"
+          label="包含关键词"
+          density="compact"
+          variant="outlined"
+          hide-details
+        />
+      </VCol>
+    </VRow>
+
+    <VRow dense class="mt-1">
+      <VCol cols="12" md="6">
+        <VTextField
+          v-model="localConfig.rules_exclude"
+          label="排除关键词"
+          density="compact"
+          variant="outlined"
+          hide-details
+        />
+      </VCol>
+    </VRow>
+
     <VAlert
       :type="reminderOnly ? 'warning' : 'info'"
       variant="tonal"
@@ -201,6 +358,9 @@ defineExpose({ load: loadStatus })
       </VBtn>
       <VSpacer />
       <VBtn variant="text" prepend-icon="mdi-refresh" @click="loadStatus">刷新状态</VBtn>
+      <VBtn variant="text" prepend-icon="mdi-filter-outline" @click="loadRuleOptions">
+        重载规则候选
+      </VBtn>
       <VBtn variant="text" prepend-icon="mdi-close" @click="emit('close')">关闭</VBtn>
     </div>
   </div>

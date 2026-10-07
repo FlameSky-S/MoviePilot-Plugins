@@ -24,6 +24,7 @@ from app.schemas.types import EventType, MediaType, MediaSource
 from app.sdk.events import Event, eventmanager
 from app.sdk.logging import logger
 from app.sdk.plugin import _PluginBase
+from app.sdk import queries as sdk_queries
 
 from .api import build_api_routes
 from .core.calendarview import build_month_grid
@@ -39,10 +40,15 @@ from .core.models import (
     status_label,
 )
 from .core.renewal import decide_renewal, latest_season, season_stats, should_notify
+from .core.rules import RULE_FIELDS, merge_rules, rule_payload
 from .core.store import WatchlistStore
 from .core.tmdb import TmdbSeasonSource
 
 DEFAULT_CRON = "0 */6 * * *"
+
+# 「续订规则」里画质/分辨率的候选（宿主的合法取值，界面只是给提示，允手填）。
+RESOLUTION_CHOICES = ("8K", "4K", "1080P", "720P", "480P")
+QUALITY_CHOICES = ("BluRay", "Remux", "WEB-DL", "WEBRip", "UHD", "HDTV", "DVD", "SDTV")
 
 
 def _now() -> str:
@@ -67,7 +73,7 @@ class AutoRenew(_PluginBase):
     plugin_name = "自动续订"
     plugin_desc = "长期追踪电视剧：TMDB 上出现新一季就自动建订阅。提供 Sonarr 式状态标签、季进度与播出日历。"
     plugin_icon = "AutoRenew.png"
-    plugin_version = "1.0.4"
+    plugin_version = "1.0.5"
     plugin_author = "FlameSky-S"
     author_url = "https://github.com/FlameSky-S"
     plugin_config_prefix = "autorenew_"
@@ -84,6 +90,7 @@ class AutoRenew(_PluginBase):
 
     _store: Optional[WatchlistStore] = None
     _tmdb: Optional[TmdbSeasonSource] = None
+    _rule_defaults: Optional[Dict[str, Any]] = None
     _last_run: Optional[str] = None
     _last_result: Optional[Dict[str, Any]] = None
 
@@ -102,6 +109,8 @@ class AutoRenew(_PluginBase):
 
         self._store = WatchlistStore(self.get_data, self.save_data)
         self._tmdb = TmdbSeasonSource()
+        # 续订规则第二级：插件设置（空项会被 rule_payload 丢掉，即「交给宿主全局」）
+        self._rule_defaults = rule_payload(config)
         # 上次检测时间持久化在 plugindata 里（宿主重载会重建插件实例）
         self._last_run = self.get_data("last_run") or None
 
@@ -400,10 +409,10 @@ class AutoRenew(_PluginBase):
         for show in shows:
             show, seasons = self.__refresh_show(show, library)
 
-            if is_terminal(show.tmdb_status) and not any(
-                int(s.get("season_number") or 0) > show.season for s in seasons
-            ):
-                # 已完结/已砍且没有更新的季 -> 停止轮询
+            if is_terminal(show.tmdb_status):
+                # 硬门槛：已完结 / 已砍永不自动续订（除非 TMDB 把状态改回连载中）。
+                # 别再按「有没有更新的季」放行 —— 那正是「绝望写手」被连建
+                # S2、S3 并真下载的原因（用户是故意只留前几季）。
                 self._store.upsert(show)
                 continue
 
@@ -475,6 +484,7 @@ class AutoRenew(_PluginBase):
         if not season:
             return False, "缺少季号"
         media_source = getattr(MediaSource, "TMDB", None) or getattr(MediaSource, "THETMDB", None)
+        rules = self.__rule_kwargs(show)
         try:
             sid, message = SubscribeChain().add(
                 title=show.title,
@@ -484,6 +494,9 @@ class AutoRenew(_PluginBase):
                 media_source=media_source,
                 media_id=str(show.tmdbid),
                 message=self._notify,
+                # 续订规则：宿主会把 kwargs 直接当成订阅行字段，
+                # 没出现在这里的字段它才会走自己的全局默认。
+                **rules,
             )
         except Exception as err:  # noqa: BLE001
             logger.error(f"自动续订：为「{show.title}」第 {season} 季建订阅异常：{err}")
@@ -491,8 +504,47 @@ class AutoRenew(_PluginBase):
         if sid is None:
             logger.warn(f"自动续订：为「{show.title}」第 {season} 季建订阅未成功：{message}")
             return False, str(message)
-        logger.info(f"自动续订：已为「{show.title}」创建第 {season} 季订阅（id={sid}）：{message}")
+        logger.info(
+            f"自动续订：已为「{show.title}」创建第 {season} 季订阅（id={sid}）：{message}"
+            + (f" 规则={rules}" if rules else " 规则=跟随宿主全局")
+        )
         return True, str(message)
+
+    def __show_existing_rules(self, show: TrackedShow) -> Dict[str, Any]:
+        """一级回退：这部剧**已有订阅**里配的规则。
+
+        用户手动建订阅时带的偏好应当被沿用。⚠️ 订阅一旦完成就会从 `subscribe`
+        表移进历史表，所以只查活跃表会大量漏掉 —— 两张都要看。
+        SDK 查询门面只在宿主进程内可用（独立进程里抛
+        `插件数据查询服务尚未配置`），拿不到就当没有这一级，绝不能因此中断建订阅。
+        """
+        target = str(show.tmdbid)
+        for label, fetch in (
+            ("活跃订阅", sdk_queries.list_subscriptions),
+            ("订阅历史", sdk_queries.list_subscription_history),
+        ):
+            try:
+                page = fetch({"media_id": target})
+            except Exception as err:  # noqa: BLE001
+                logger.warn(f"自动续订：读取{label}失败，跳过该级回退：{err}")
+                continue
+            best: Dict[str, Any] = {}
+            for item in list(getattr(page, "items", None) or []):
+                payload = {
+                    field: getattr(item, field, None)
+                    for field in RULE_FIELDS
+                    if getattr(item, field, None) not in (None, "")
+                }
+                # 同一部剧可能有多季，取参数最全的那条
+                if len(payload) > len(best):
+                    best = payload
+            if best:
+                return best
+        return {}
+
+    def __rule_kwargs(self, show: TrackedShow) -> Dict[str, Any]:
+        """建订阅时下发的规则：该剧已有订阅 → 插件设置 → （不传 = 宿主全局）。"""
+        return merge_rules([self.__show_existing_rules(show), self._rule_defaults])
 
     # ------------------------------------------------------------ 通知
     def __post(self, title: str, text: str) -> None:
@@ -902,6 +954,55 @@ class AutoRenew(_PluginBase):
             "refreshed": refreshed,
             "failed": failed,
             "message": f"已刷新 {refreshed} 部的 TMDB 信息" + (f"，{failed} 部失败" if failed else ""),
+        }
+
+    def api_rule_options(self) -> Dict[str, Any]:
+        """给设置界面用的候选项：站点 / 过滤规则组 / 下载器 + 画质分辨率提示值。
+
+        全部**从宿主现读**，别在插件里硬编码站点 id 之类会漂移的东西。
+        """
+        sites: List[Dict[str, Any]] = []
+        try:
+            from app.db.models.site import Site
+
+            with SessionFactory() as db:
+                rows = db.query(Site).all()
+            for row in rows:
+                sites.append(
+                    {
+                        "id": int(getattr(row, "id", 0) or 0),
+                        "name": str(getattr(row, "name", "") or ""),
+                        "domain": str(getattr(row, "domain", "") or ""),
+                        "public": bool(getattr(row, "public", False)),
+                    }
+                )
+        except Exception as err:  # noqa: BLE001
+            logger.warn(f"自动续订：读取站点列表失败（设置页站点项会为空）：{err}")
+
+        def systemconfig(key: str) -> Any:
+            try:
+                return self.systemconfig.get(key)
+            except Exception as err:  # noqa: BLE001
+                logger.warn(f"自动续订：读取系统设置 {key} 失败：{err}")
+                return None
+
+        groups = [
+            str(g.get("name"))
+            for g in (systemconfig("UserFilterRuleGroups") or [])
+            if isinstance(g, dict) and g.get("name")
+        ]
+        downloaders = [
+            str(d.get("name"))
+            for d in (systemconfig("Downloaders") or [])
+            if isinstance(d, dict) and d.get("name")
+        ]
+        return {
+            "sites": sites,
+            "filter_groups": groups,
+            "downloaders": downloaders,
+            "resolution_choices": list(RESOLUTION_CHOICES),
+            "quality_choices": list(QUALITY_CHOICES),
+            "current": dict(self._rule_defaults or {}),
         }
 
     def api_calendar(self, month: Optional[str] = None) -> Dict[str, Any]:

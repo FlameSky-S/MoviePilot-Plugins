@@ -51,6 +51,7 @@ from autorenew_core.renewal import (  # noqa: E402
     season_stats,
     should_notify,
 )
+from autorenew_core.rules import RULE_FIELDS, merge_rules, rule_payload  # noqa: E402
 from autorenew_core.store import WatchlistStore  # noqa: E402
 
 CASES = []
@@ -653,6 +654,154 @@ def test_should_notify_when_a_higher_season_appears():
 def test_should_notify_without_season_is_false():
     assert should_notify(None, None) is False
     assert should_notify(0, None) is False
+
+
+# --------------------------------------------------------------------------
+# 硬门槛：已完结 / 已砍 的剧永不自动续订
+# --------------------------------------------------------------------------
+
+
+@case
+def test_decide_renewal_never_renews_ended_show_with_new_season():
+    """已完结的剧即便 TMDB 上有更新的季，也不许自动续订。
+
+    真事：名单里「绝望写手」在已完结区（TMDB=Ended），但 TMDB 有 5 季、磁盘只有
+    第 1 季 —— 旧逻辑判成「有新季」连续建了 S2、S3 两条订阅并真的下载了。
+    """
+    show = TrackedShow(tmdbid=1, title="绝望写手", season=1, tmdb_status="Ended")
+    got = decide_renewal(show, _seasons((1, 10), (2, 8), (3, 9), (4, 8), (5, 6)))
+    assert got.should_renew is False, got
+    assert got.season is None, got
+    assert "已完结" in got.reason, got.reason
+
+
+@case
+def test_decide_renewal_never_renews_canceled_show_with_new_season():
+    show = TrackedShow(tmdbid=2, title="被砍的剧", season=1, tmdb_status="Canceled")
+    got = decide_renewal(show, _seasons((1, 10), (2, 8)))
+    assert got.should_renew is False, got
+    assert "已砍" in got.reason or "已完结" in got.reason, got.reason
+
+
+@case
+def test_decide_renewal_still_renews_returning_series():
+    """门槛只针对已终止状态，连载中的剧照旧续订。"""
+    show = TrackedShow(tmdbid=3, title="连载中", season=1, tmdb_status="Returning Series")
+    got = decide_renewal(show, _seasons((1, 10), (2, 8)))
+    assert got.should_renew is True, got
+    assert got.season == 2, got
+
+
+@case
+def test_decide_renewal_terminal_gate_beats_per_show_switch():
+    """硬门槛优先于单剧开关：已完结就是不发，开关是开还是关都一样。"""
+    for flag in (True, False):
+        show = TrackedShow(tmdbid=4, title="已完结", season=1, auto_renew=flag,
+                           tmdb_status="Ended")
+        assert decide_renewal(show, _seasons((1, 10), (2, 8))).should_renew is False
+
+
+@case
+def test_decide_renewal_unknown_status_still_renews():
+    """status 未知（TMDB 新取值 / 拉取失败）不做拦截，避免误杀。"""
+    show = TrackedShow(tmdbid=5, title="状态未知", season=1, tmdb_status=None)
+    assert decide_renewal(show, _seasons((1, 10), (2, 8))).should_renew is True
+
+
+# --------------------------------------------------------------------------
+# 续订规则的三级回退
+# --------------------------------------------------------------------------
+
+
+@case
+def test_merge_rules_first_non_empty_level_wins():
+    """三级回退：每个字段独立取「第一个非空」的那一级。"""
+    got = merge_rules(
+        [
+            {"quality": "BluRay"},              # L1 该剧已有订阅
+            {"quality": "WEB-DL", "resolution": "1080P"},  # L2 插件设置
+            {"resolution": "4K"},               # L3 交给宿主全局
+        ]
+    )
+    assert got == {"quality": "BluRay", "resolution": "1080P"}, got
+
+
+@case
+def test_merge_rules_skips_empty_strings_none_and_blank_lists():
+    """空值不算「有值」——空字符串 / None / 空列表都要继续往下回退。"""
+    got = merge_rules(
+        [
+            {"quality": "", "resolution": None, "sites": []},
+            {"quality": "WEB-DL", "sites": [1, 4]},
+        ]
+    )
+    assert got == {"quality": "WEB-DL", "sites": [1, 4]}, got
+
+
+@case
+def test_merge_rules_keeps_unset_fields_out_of_the_result():
+    """三级都没配的字段**不出现在结果里** —— 这样宿主才会用自己的全局默认。"""
+    got = merge_rules([{}, {"quality": "BluRay"}, {}])
+    assert got == {"quality": "BluRay"}, got
+    assert "resolution" not in got, got
+
+
+@case
+def test_merge_rules_ignores_the_string_null_sentinel():
+    """宿主空值会落成字符串 "null"（实测 subscribe.sites 就是这样），不能当有值。"""
+    got = merge_rules([{"sites": "null", "filter_groups": "null"}, {"sites": [1]}])
+    assert got == {"sites": [1]}, got
+
+
+@case
+def test_merge_rules_handles_empty_and_junk_levels():
+    assert merge_rules([]) == {}
+    assert merge_rules([None, {}, {"quality": "x"}]) == {"quality": "x"}
+
+
+@case
+def test_merge_rules_ignores_fields_not_in_the_allow_list():
+    """只认订阅表真实存在的列，界面上的无关字段不许漏进订阅行。"""
+    got = merge_rules([{"quality": "BluRay", "随便什么键": 1, "enabled": True}])
+    assert got == {"quality": "BluRay"}, got
+
+
+@case
+def test_rule_payload_normalizes_sites_to_ints_and_trims_strings():
+    got = rule_payload(
+        {
+            "rules_sites": ["1", 4, None, "x"],
+            "rules_filter_groups": [" 电视剧 ", "", None],
+            "rules_quality": "  BluRay  ",
+            "rules_resolution": "   ",
+            "rules_downloader": "qbittorrent",
+            "rules_include": "H265",
+            "enabled": True,
+        }
+    )
+    assert got == {
+        "sites": [1, 4],
+        "filter_groups": ["电视剧"],
+        "quality": "BluRay",
+        "downloader": "qbittorrent",
+        "include": "H265",
+    }, got
+
+
+@case
+def test_rule_payload_drops_everything_when_nothing_configured():
+    """一个都没配 → 空 dict → 上游不传任何字段 → 宿主用全局默认。"""
+    assert rule_payload({}) == {}
+    assert rule_payload(None) == {}
+    assert rule_payload({"rules_sites": [], "rules_quality": ""}) == {}
+
+
+@case
+def test_rule_payload_output_is_a_valid_fallback_level():
+    """`rule_payload` 的输出必须能直接当作三级回退里的第二级使用。"""
+    level = rule_payload({"rules_quality": "WEB-DL"})
+    got = merge_rules([{}, level, {"quality": "4K"}])
+    assert got == {"quality": "WEB-DL"}, got
 
 
 # --------------------------------------------------------------------------

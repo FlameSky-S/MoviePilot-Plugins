@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
-from .models import TrackedShow
+from .models import TrackedShow, is_terminal, status_label
 
 
 @dataclass
@@ -106,6 +106,12 @@ def decide_renewal(
     seasons: Optional[Sequence[Dict[str, Any]]],
 ) -> RenewalDecision:
     """给定一条追踪记录和 TMDB 的季列表，判定这次要不要建订阅。"""
+    # ⚠️ 硬门槛，**优先于单剧开关**：已终结的剧永不自动续订。
+    # 反例（真实踩过）：TMDB 状态 Ended 但季数比磁盘多（用户故意只留前几季）——
+    # 旧逻辑判成「有新季」，连着建了 S2、S3 两条订阅并真的下载了。
+    if is_terminal(show.tmdb_status):
+        return RenewalDecision(False, None, 0, f"{status_label(show.tmdb_status)}，不参与自动续订")
+
     if not show.auto_renew:
         return RenewalDecision(False, None, 0, "该剧已关闭自动续订")
 

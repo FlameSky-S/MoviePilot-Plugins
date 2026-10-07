@@ -76,6 +76,10 @@ function createAutoRenewApi(api, pluginBase) {
     calendar(params = {}) {
       return get(`/calendar${query(params)}`)
     },
+    /** 续订规则候选项：{sites, filter_groups, downloaders, quality_choices, resolution_choices}。 */
+    ruleOptions() {
+      return get('/rule_options')
+    },
     check() {
       return post('/check', {})
     },
