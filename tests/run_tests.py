@@ -31,6 +31,9 @@ def _load_core() -> None:
 
 _load_core()
 
+from datetime import date  # noqa: E402
+
+from autorenew_core.calendarview import build_month_grid  # noqa: E402
 from autorenew_core.library import diff_watchlist, library_candidates, parse_seasoninfo  # noqa: E402
 from autorenew_core.models import (  # noqa: E402
     SOURCE_LIBRARY,
@@ -477,6 +480,103 @@ def test_diff_added_payload_carries_title_and_season():
 def test_diff_handles_duplicate_candidates_without_double_counting():
     got = diff_watchlist([], [_lib(1, "重复"), _lib(1, "重复")])
     assert [c["tmdbid"] for c in got["added"]] == [1], got
+
+
+# --------------------------------------------------------------------------
+# 月历网格 —— 「播出日历」重做的纯函数 seam（纯函数，不碰宿主）
+#
+# 网格事实来自 `calendar.Calendar(firstweekday=0).monthdatescalendar`，不是脑算：
+#   2026-10  31 天，10-01 周四 → 首格 2026-09-28，末格 2026-11-01，5 周
+#   2026-06  30 天，06-01 周一 → 首格就是 06-01，无前导补位
+#   2026-11  30 天，11-01 周日 → 10-26 起，**6 周**（末格 2026-12-06）
+# --------------------------------------------------------------------------
+
+def _ev(day, title="某剧", tmdbid=1, season=1, episode=None):
+    return {
+        "date": day,
+        "title": title,
+        "tmdbid": tmdbid,
+        "season": season,
+        "episode": episode,
+        "poster_url": None,
+        "status_label": "连载中",
+    }
+
+
+@case
+def test_month_grid_october_2026_layout():
+    got = build_month_grid(2026, 10, [])
+    assert got["month_key"] == "2026-10" and got["days"] == 31, got
+    assert len(got["weeks"]) == 5, len(got["weeks"])
+    first = got["weeks"][0]
+    assert [c["day"] for c in first] == [28, 29, 30, 1, 2, 3, 4], first
+    assert first[0]["date"] == "2026-09-28" and first[0]["in_month"] is False
+    assert first[3]["date"] == "2026-10-01" and first[3]["in_month"] is True
+    assert got["weeks"][-1][-1]["date"] == "2026-11-01", got["weeks"][-1][-1]
+
+
+@case
+def test_month_grid_has_no_leading_pad_when_month_starts_on_monday():
+    got = build_month_grid(2026, 6, [])
+    assert got["weeks"][0][0]["date"] == "2026-06-01", got["weeks"][0][0]
+    assert got["weeks"][0][0]["in_month"] is True
+    assert got["weeks"][0][0]["day"] == 1
+
+
+@case
+def test_month_grid_uses_six_weeks_when_month_spans_six():
+    got = build_month_grid(2026, 11, [])
+    assert len(got["weeks"]) == 6, len(got["weeks"])
+    assert got["weeks"][-1][-1]["date"] == "2026-12-06", got["weeks"][-1][-1]
+
+
+@case
+def test_month_grid_attaches_events_to_the_right_day():
+    got = build_month_grid(2026, 10, [_ev("2026-10-20", "赛博朋克", 105248)])
+    cells = [c for w in got["weeks"] for c in w if c["date"] == "2026-10-20"]
+    assert len(cells) == 1, cells
+    assert [e["title"] for e in cells[0]["events"]] == ["赛博朋克"], cells[0]
+    rest = [c for w in got["weeks"] for c in w if c["date"] != "2026-10-20"]
+    assert all(c["events"] == [] for c in rest)
+    assert got["events_total"] == 1
+
+
+@case
+def test_month_grid_keeps_padding_day_events():
+    # 2026-09-28 在网格里但属于上月 —— 事件必须照挂，否则跨月那一格会丢内容
+    got = build_month_grid(2026, 10, [_ev("2026-09-28", "上月最后一天")])
+    cell = got["weeks"][0][0]
+    assert cell["in_month"] is False, cell
+    assert [e["title"] for e in cell["events"]] == ["上月最后一天"], cell
+
+
+@case
+def test_month_grid_drops_events_outside_the_grid():
+    got = build_month_grid(2026, 10, [_ev("2026-12-31"), _ev("2026-01-01")])
+    assert got["events_total"] == 0, got["events_total"]
+    assert all(c["events"] == [] for w in got["weeks"] for c in w)
+
+
+@case
+def test_month_grid_marks_today_exactly_once():
+    got = build_month_grid(2026, 10, [], today=date(2026, 10, 6))
+    marked = [c["date"] for w in got["weeks"] for c in w if c["is_today"]]
+    assert marked == ["2026-10-06"], marked
+
+
+@case
+def test_month_grid_prev_next_wrap_across_year_boundary():
+    jan = build_month_grid(2026, 1, [])
+    assert jan["prev"] == "2025-12" and jan["next"] == "2026-02", jan
+    dec = build_month_grid(2026, 12, [])
+    assert dec["prev"] == "2026-11" and dec["next"] == "2027-01", dec
+
+
+@case
+def test_month_grid_sorts_events_within_a_day():
+    got = build_month_grid(2026, 10, [_ev("2026-10-20", "B", 2), _ev("2026-10-20", "A", 1)])
+    cell = [c for w in got["weeks"] for c in w if c["date"] == "2026-10-20"][0]
+    assert [e["title"] for e in cell["events"]] == ["A", "B"], cell
 
 
 # --------------------------------------------------------------------------

@@ -37,7 +37,11 @@ const searchResults = ref([])
 const searching = ref(false)
 
 const calendarOpen = ref(false)
-const calendarEvents = ref([])
+const calendarGrid = ref(null)
+const calendarUpcoming = ref([])
+const calendarUpcomingTotal = ref(0)
+const calendarLoading = ref(false)
+const CAL_MAX_PER_DAY = 3
 
 const detailOpen = ref(false)
 const detail = ref(null)
@@ -228,14 +232,55 @@ async function runCheck() {
   }
 }
 
-async function openCalendar() {
-  calendarOpen.value = true
+/** 拉某个月的月历网格；month 为空则回落到本月。 */
+async function loadCalendar(month = '') {
+  calendarLoading.value = true
+  error.value = ''
   try {
-    const res = unwrapResponse(await pluginApi.value.calendar({ days: 60 }))
-    calendarEvents.value = res?.events || []
+    const res = unwrapResponse(await pluginApi.value.calendar({ month }))
+    calendarGrid.value = res?.grid || null
+    calendarUpcoming.value = res?.upcoming || []
+    calendarUpcomingTotal.value = res?.upcoming_total || 0
   } catch (err) {
     error.value = errorMessage(err)
+  } finally {
+    calendarLoading.value = false
   }
+}
+
+async function openCalendar() {
+  calendarOpen.value = true
+  await loadCalendar('')
+}
+
+function shiftCalendar(step) {
+  const grid = calendarGrid.value
+  if (!grid) return
+  loadCalendar(step < 0 ? grid.prev : grid.next)
+}
+
+function visibleEvents(cell) {
+  return (cell.events || []).slice(0, CAL_MAX_PER_DAY)
+}
+
+function openCalendarEvent(event) {
+  const show = shows.value.find(item => item.tmdbid === event.tmdbid)
+  calendarOpen.value = false
+  if (show) openDetail(show)
+}
+
+const calendarTitle = computed(() => {
+  const grid = calendarGrid.value
+  return grid ? `${grid.year} 年 ${grid.month} 月` : '播出日历'
+})
+
+/** 徽标配色：让「有活儿要干」的比「没事干」的显眼。 */
+function badgeColor(badge) {
+  if (badge === '有新季可订阅') return 'secondary'
+  if (badge === '新季已确认待开播') return 'info'
+  if (badge === '已追平') return 'success'
+  if (badge === '已暂停续订') return 'warning'
+  return ''
 }
 
 onMounted(load)
@@ -338,15 +383,21 @@ defineExpose({ load, loading })
                 <VChip size="x-small" variant="tonal" color="primary">
                   {{ seasonLabel(show.season) }}
                 </VChip>
+                <VChip
+                  v-if="show.badge"
+                  size="x-small"
+                  variant="tonal"
+                  :color="badgeColor(show.badge)"
+                >
+                  {{ show.badge }}
+                </VChip>
               </div>
-              <VChip size="x-small" variant="tonal" class="mt-1" color="secondary">
-                {{ show.badge }}
-              </VChip>
               <div v-if="show.next_episode_air_date" class="text-caption mt-1">
                 下一集 {{ formatDate(show.next_episode_air_date) }}
               </div>
             </VCardText>
-            <VCardActions class="pa-1">
+            <VDivider />
+            <VCardActions class="px-2 py-1 flex-nowrap">
               <VTooltip
                 :text="
                   reminderOnly
@@ -356,6 +407,7 @@ defineExpose({ load, loading })
                 location="top"
               >
                 <template #activator="{ props: switchProps }">
+                  <!-- ms-n2 抵掉 VSwitch 自带的左内缩，让轨道左缘与上方文字对齐 -->
                   <VSwitch
                     v-bind="switchProps"
                     :model-value="show.auto_renew"
@@ -363,6 +415,7 @@ defineExpose({ load, loading })
                     density="compact"
                     hide-details
                     label="续订"
+                    class="ms-n2"
                     @click.stop
                     @update:model-value="toggleRenew(show)"
                   />
@@ -374,8 +427,9 @@ defineExpose({ load, loading })
                   <VBtn
                     v-bind="deleteProps"
                     icon="mdi-delete-outline"
-                    size="x-small"
+                    size="small"
                     variant="text"
+                    color="error"
                     @click.stop="removeShow(show)"
                   />
                 </template>
@@ -432,7 +486,14 @@ defineExpose({ load, loading })
       <div class="autorenew-fab-host">
         <VMenu v-model="fabOpen" location="top end" offset="16">
           <template #activator="{ props: activatorProps }">
-            <VFab
+            <!--
+              这里用 VBtn 而**不是** VFab：VFab 渲染出的 .v-fab 包裹层是 inline-flex
+              且宽高为 0（浏览器实测 getBoundingClientRect() = 0×0），它的
+              .v-fab__container 又是 position:absolute —— 尺寸塌成 0 之后按钮会飘到
+              视口右缘被裁掉（「有一半在屏幕外」）。VBtn 有固有尺寸，放进这个 fixed
+              宿主里位置就是对的。
+            -->
+            <VBtn
               v-bind="activatorProps"
               icon="mdi-dots-grid"
               size="large"
@@ -538,24 +599,132 @@ defineExpose({ load, loading })
       </VCard>
     </VDialog>
 
-    <!-- 日历 -->
-    <VDialog v-model="calendarOpen" max-width="560">
+    <!-- 播出日历：周一起始的月历网格（Sonarr 式） -->
+    <VDialog v-model="calendarOpen" max-width="1040" scrollable>
       <VCard>
-        <VCardTitle class="text-subtitle-1">未来 60 天播出</VCardTitle>
-        <VCardText>
-          <VList v-if="calendarEvents.length" density="compact">
-            <VListItem
-              v-for="event in calendarEvents"
-              :key="`${event.date}-${event.tmdbid}`"
-              :title="event.title"
-              :subtitle="`${event.date} · ${event.status_label}`"
-              prepend-icon="mdi-calendar-blank"
-            />
-          </VList>
-          <VAlert v-else type="info" variant="tonal" density="compact">
-            暂无已确认的近期播出。TMDB 上未公布下一集日期的剧不会出现在这里。
-          </VAlert>
+        <VCardItem class="py-2">
+          <template #title>
+            <span class="text-subtitle-1">播出日历</span>
+          </template>
+          <template #append>
+            <div class="d-flex align-center ga-1">
+              <VBtn
+                icon="mdi-chevron-left"
+                variant="text"
+                size="small"
+                @click="shiftCalendar(-1)"
+              />
+              <div class="autorenew-cal-title">{{ calendarTitle }}</div>
+              <VBtn
+                icon="mdi-chevron-right"
+                variant="text"
+                size="small"
+                @click="shiftCalendar(1)"
+              />
+              <VBtn size="small" variant="tonal" class="ms-2" @click="loadCalendar('')">
+                今天
+              </VBtn>
+            </div>
+          </template>
+        </VCardItem>
+        <VDivider />
+
+        <VCardText class="pa-3">
+          <VProgressLinear v-if="calendarLoading" indeterminate class="mb-2" />
+
+          <div class="autorenew-cal-weekdays">
+            <div
+              v-for="(label, index) in calendarGrid?.weekday_headers || []"
+              :key="label"
+              class="autorenew-cal-weekday"
+              :class="{ 'is-weekend': index >= 5 }"
+            >
+              {{ label }}
+            </div>
+          </div>
+
+          <div
+            v-for="(week, wi) in calendarGrid?.weeks || []"
+            :key="wi"
+            class="autorenew-cal-week"
+          >
+            <div
+              v-for="cell in week"
+              :key="cell.date"
+              class="autorenew-cal-cell"
+              :class="{
+                'is-out': !cell.in_month,
+                'is-today': cell.is_today,
+                'has-events': cell.events.length,
+              }"
+            >
+              <div class="autorenew-cal-daynum">
+                <span v-if="cell.is_today" class="autorenew-cal-todaynum">{{ cell.day }}</span>
+                <span v-else>{{ cell.day }}</span>
+              </div>
+              <div class="autorenew-cal-events">
+                <div
+                  v-for="event in visibleEvents(cell)"
+                  :key="`${cell.date}-${event.tmdbid}`"
+                  class="autorenew-cal-event"
+                  :title="`${event.title} · S${event.season} · ${event.status_label}`"
+                  @click="openCalendarEvent(event)"
+                >
+                  <VImg
+                    :src="event.poster_url || ''"
+                    width="20"
+                    height="30"
+                    cover
+                    class="autorenew-cal-poster bg-grey-darken-3"
+                  />
+                  <div class="autorenew-cal-eventtext">
+                    <div class="autorenew-cal-eventtitle">{{ event.title }}</div>
+                    <div class="autorenew-cal-eventmeta">S{{ event.season }}</div>
+                  </div>
+                </div>
+                <div v-if="cell.events.length > CAL_MAX_PER_DAY" class="autorenew-cal-more">
+                  +{{ cell.events.length - CAL_MAX_PER_DAY }} 部
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="!calendarLoading && !calendarGrid?.events_total" class="text-caption text-medium-emphasis mt-2">
+            本月没有已确认的播出。TMDB 尚未公布下一集日期的剧不会出现在这里；可以用左右箭头查看其它月份。
+          </div>
         </VCardText>
+
+        <template v-if="calendarUpcoming.length">
+          <VDivider />
+          <VCardText class="pa-3">
+            <div class="text-caption text-medium-emphasis mb-2">
+              接下来（共 {{ calendarUpcomingTotal }} 集）
+            </div>
+            <div class="d-flex flex-wrap ga-2">
+              <div
+                v-for="event in calendarUpcoming"
+                :key="`up-${event.date}-${event.tmdbid}`"
+                class="autorenew-cal-upcoming"
+                @click="openCalendarEvent(event)"
+              >
+                <VImg
+                  :src="event.poster_url || ''"
+                  width="28"
+                  height="42"
+                  cover
+                  class="autorenew-cal-poster bg-grey-darken-3"
+                />
+                <div class="autorenew-cal-eventtext">
+                  <div class="autorenew-cal-eventtitle">{{ event.title }}</div>
+                  <div class="autorenew-cal-eventmeta">
+                    {{ formatDate(event.date) }} · S{{ event.season }}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </VCardText>
+        </template>
+
         <VCardActions>
           <VSpacer />
           <VBtn variant="text" @click="calendarOpen = false">关闭</VBtn>
@@ -679,5 +848,153 @@ defineExpose({ load, loading })
   right: 24px;
   bottom: 24px;
   z-index: 2000;
+}
+
+/* ---------------- 播出日历：月历网格 ---------------- */
+.autorenew-cal-title {
+  min-width: 104px;
+  text-align: center;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.autorenew-cal-weekdays,
+.autorenew-cal-week {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.autorenew-cal-weekdays {
+  margin-bottom: 4px;
+}
+
+.autorenew-cal-week {
+  margin-bottom: 4px;
+}
+
+.autorenew-cal-weekday {
+  text-align: center;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  padding: 2px 0;
+  opacity: 0.65;
+}
+
+.autorenew-cal-weekday.is-weekend {
+  color: rgb(var(--v-theme-secondary));
+  opacity: 0.9;
+}
+
+.autorenew-cal-cell {
+  min-height: 88px;
+  padding: 4px 5px 5px;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow: hidden;
+  background: rgba(var(--v-theme-surface), 0.35);
+}
+
+.autorenew-cal-cell.is-out {
+  opacity: 0.34;
+}
+
+.autorenew-cal-cell.has-events {
+  background: rgba(var(--v-theme-primary), 0.06);
+}
+
+.autorenew-cal-cell.is-today {
+  border-color: rgb(var(--v-theme-primary));
+  box-shadow: inset 0 0 0 1px rgb(var(--v-theme-primary));
+}
+
+.autorenew-cal-daynum {
+  font-size: 0.72rem;
+  line-height: 1.2;
+  text-align: right;
+  opacity: 0.85;
+}
+
+.autorenew-cal-todaynum {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+  font-weight: 700;
+}
+
+.autorenew-cal-events {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.autorenew-cal-event {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 1px 2px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.autorenew-cal-event:hover {
+  background: rgba(var(--v-theme-primary), 0.18);
+}
+
+.autorenew-cal-poster {
+  flex: none;
+  border-radius: 3px;
+}
+
+.autorenew-cal-eventtext {
+  min-width: 0;
+}
+
+.autorenew-cal-eventtitle {
+  font-size: 0.7rem;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.autorenew-cal-eventmeta {
+  font-size: 0.62rem;
+  line-height: 1.1;
+  opacity: 0.62;
+}
+
+.autorenew-cal-more {
+  font-size: 0.62rem;
+  opacity: 0.62;
+  padding-left: 2px;
+}
+
+.autorenew-cal-upcoming {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  max-width: 236px;
+  padding: 4px 8px 4px 4px;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.autorenew-cal-upcoming:hover {
+  border-color: rgb(var(--v-theme-primary));
+  background: rgba(var(--v-theme-primary), 0.08);
 }
 </style>

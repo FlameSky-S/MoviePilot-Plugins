@@ -25,6 +25,7 @@ from app.sdk.logging import logger
 from app.sdk.plugin import _PluginBase
 
 from .api import build_api_routes
+from .core.calendarview import build_month_grid
 from .core.library import diff_watchlist, library_candidates, parse_seasoninfo
 from .core.models import (
     SOURCE_LABELS,
@@ -66,7 +67,7 @@ class AutoRenew(_PluginBase):
     plugin_name = "自动续订"
     plugin_desc = "长期追踪电视剧：TMDB 上出现新一季就自动建订阅。提供 Sonarr 式状态标签、季进度与播出日历。"
     plugin_icon = "AutoRenew.png"
-    plugin_version = "1.0.2"
+    plugin_version = "1.0.3"
     plugin_author = "FlameSky-S"
     author_url = "https://github.com/FlameSky-S"
     plugin_config_prefix = "autorenew_"
@@ -831,34 +832,52 @@ class AutoRenew(_PluginBase):
             "message": f"已刷新 {refreshed} 部的 TMDB 信息" + (f"，{failed} 部失败" if failed else ""),
         }
 
-    def api_calendar(self, days: int = 30) -> Dict[str, Any]:
-        try:
-            window = max(1, int(days))
-        except (TypeError, ValueError):
-            window = 30
+    def api_calendar(self, month: Optional[str] = None) -> Dict[str, Any]:
+        """播出日历：按月返回一张周一起始的月历网格，事件带海报。
+
+        网格由纯函数 `build_month_grid` 排（含跨月补位格），前端只渲染不计算。
+        `month` 传 `YYYY-MM`，缺省或非法则回落到本月。
+        """
         today = date.today()
-        end = today + timedelta(days=window)
+        raw = str(month or "").strip()[:7]
+        year, month_no = today.year, today.month
+        if len(raw) == 7 and raw[4] == "-" and raw[:4].isdigit() and raw[5:].isdigit():
+            candidate = int(raw[5:])
+            if 1 <= candidate <= 12:
+                year, month_no = int(raw[:4]), candidate
+
         events: List[Dict[str, Any]] = []
+        upcoming: List[Dict[str, Any]] = []
         for show in self._store.list_all() if self._store else []:
             air = show.next_episode_air_date
             if not air:
                 continue
+            key = str(air)[:10]
             try:
-                air_date = date.fromisoformat(str(air)[:10])
+                air_date = date.fromisoformat(key)
             except ValueError:
                 continue
-            if today <= air_date <= end:
-                events.append(
-                    {
-                        "date": air_date.isoformat(),
-                        "title": show.title,
-                        "tmdbid": show.tmdbid,
-                        "season": show.season,
-                        "status_label": status_label(show.tmdb_status),
-                    }
-                )
-        events.sort(key=lambda event: event["date"])
-        return {"days": window, "events": events}
+            item = {
+                "date": key,
+                "title": show.title,
+                "tmdbid": show.tmdbid,
+                "season": show.season,
+                "poster_url": self.__poster_url(show.poster_path),
+                "status_label": status_label(show.tmdb_status),
+            }
+            events.append(item)
+            if air_date >= today:
+                upcoming.append(item)
+
+        grid = build_month_grid(year, month_no, events, today=today)
+        upcoming.sort(key=lambda event: (event["date"], event["title"]))
+        return {
+            "month": grid["month_key"],
+            "grid": grid,
+            "upcoming": upcoming[:10],
+            "upcoming_total": len(upcoming),
+            "today": today.isoformat(),
+        }
 
     def api_check(self) -> Dict[str, Any]:
         return {"success": True, "result": self.check_renewals(force=True)}
