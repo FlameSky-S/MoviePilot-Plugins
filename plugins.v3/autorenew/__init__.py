@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import threading
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -26,19 +27,18 @@ from app.sdk.plugin import _PluginBase
 
 from .api import build_api_routes
 from .core.calendarview import build_month_grid
-from .core.library import diff_watchlist, library_candidates, parse_seasoninfo
+from .core.library import diff_watchlist, library_candidates
 from .core.models import (
     SOURCE_LABELS,
     SOURCE_LIBRARY,
     SOURCE_MANUAL,
     SOURCE_SUBSCRIBE,
-    MEDIA_TYPE_TV,
     TrackedShow,
     badge_for,
     is_terminal,
     status_label,
 )
-from .core.renewal import decide_renewal, latest_season
+from .core.renewal import decide_renewal, latest_season, season_stats, should_notify
 from .core.store import WatchlistStore
 from .core.tmdb import TmdbSeasonSource
 
@@ -67,7 +67,7 @@ class AutoRenew(_PluginBase):
     plugin_name = "自动续订"
     plugin_desc = "长期追踪电视剧：TMDB 上出现新一季就自动建订阅。提供 Sonarr 式状态标签、季进度与播出日历。"
     plugin_icon = "AutoRenew.png"
-    plugin_version = "1.0.3"
+    plugin_version = "1.0.4"
     plugin_author = "FlameSky-S"
     author_url = "https://github.com/FlameSky-S"
     plugin_config_prefix = "autorenew_"
@@ -102,11 +102,55 @@ class AutoRenew(_PluginBase):
 
         self._store = WatchlistStore(self.get_data, self.save_data)
         self._tmdb = TmdbSeasonSource()
+        # 上次检测时间持久化在 plugindata 里（宿主重载会重建插件实例）
+        self._last_run = self.get_data("last_run") or None
 
         logger.info(
             f"自动续订：初始化完成 enabled={self._enabled} 名单={len(self._store.list_all())} 部 "
             f"cron={self._cron} 自动建订阅={self._auto_subscribe} 每轮上限={self._max_actions}"
         )
+
+        self.__maybe_kick_check()
+
+    def __maybe_kick_check(self) -> None:
+        """「启用 / 自动建订阅」从关拨到开时，立刻补跑一次检测。
+
+        没这一步的话，用户拨完开关要**干等到下一个 cron 点**（默认 6h）才看得到
+        任何动作 —— 实测被当成「开关没生效」。上一份配置存在 `plugindata` 里，
+        因为宿主重载会**重建插件实例**，内存态拿不到上一份配置。
+        """
+        snapshot = {
+            "enabled": bool(self._enabled),
+            "auto_subscribe": bool(self._auto_subscribe),
+        }
+        try:
+            previous = self.get_data("config_snapshot") or {}
+            self.save_data("config_snapshot", snapshot)
+        except Exception:  # noqa: BLE001
+            previous = {}
+
+        if not (self._enabled and self._auto_subscribe):
+            return
+        turned_on = (
+            not previous
+            or not previous.get("enabled")
+            or not previous.get("auto_subscribe")
+        )
+        if not turned_on or not self._store or not self._store.list_all():
+            return
+
+        logger.info("自动续订：「自动建订阅」刚打开，立即补跑一次新季检测")
+        threading.Thread(target=self.__kick_run, name="autorenew-kick", daemon=True).start()
+
+    def __kick_run(self) -> None:
+        """后台线程里跑一次检测 —— 真建订阅是 10s 量级，不能占着宿主保存配置的请求。"""
+        try:
+            result = self.check_renewals()
+            logger.info(
+                f"自动续订：补跑检测完成，新建订阅 {len((result or {}).get('renewed') or [])} 条"
+            )
+        except Exception as err:  # noqa: BLE001
+            logger.error(f"自动续订：补跑检测失败（下一个 cron 点仍会跑）：{err}")
 
     def get_state(self) -> bool:
         return bool(self._enabled)
@@ -350,9 +394,11 @@ class AutoRenew(_PluginBase):
         renewed: List[Dict[str, Any]] = []
         waiting: List[Dict[str, Any]] = []
         actions = 0
+        # 库信息读一次、循环里复用（每部单独读会把整张表扫几十遍）
+        library = self.__library_map()
 
         for show in shows:
-            show, seasons = self.__refresh_show(show)
+            show, seasons = self.__refresh_show(show, library)
 
             if is_terminal(show.tmdb_status) and not any(
                 int(s.get("season_number") or 0) > show.season for s in seasons
@@ -378,11 +424,15 @@ class AutoRenew(_PluginBase):
                 continue
 
             if not self._auto_subscribe:
+                # 仅提醒模式下 show.season 永不推进（不建订阅就不 advance），
+                # 没有水位线的话每轮都会把同一部剧重发一遍
+                if should_notify(decision.season, show.notified_season):
+                    show.notified_season = int(decision.season or 0)
+                    self.__notify_renewal(show, decision.season, created=False)
                 self._store.upsert(show)
                 waiting.append(
                     {"title": show.title, "season": decision.season, "reason": "仅提醒模式"}
                 )
-                self.__notify_renewal(show, decision.season, created=False)
                 continue
 
             ok, message = self.__create_subscription(show, decision.season)
@@ -390,6 +440,8 @@ class AutoRenew(_PluginBase):
                 actions += 1
                 show.season = int(decision.season)
                 show.renew_count = int(show.renew_count or 0) + 1
+                # 建了订阅也算「这一季已提醒过」，免得以后切回仅提醒模式时重发
+                show.notified_season = int(decision.season or 0)
                 self._store.upsert(show)
                 renewed.append({"title": show.title, "season": decision.season, "message": message})
                 self.__notify_renewal(show, decision.season, created=True)
@@ -403,6 +455,11 @@ class AutoRenew(_PluginBase):
             self.__notify_summary(renewed)
 
         self._last_run = _now()
+        try:
+            # 持久化：宿主重载会重建插件实例，内存态留不住「上次检测时间」
+            self.save_data("last_run", self._last_run)
+        except Exception:  # noqa: BLE001
+            pass
         self._last_result = {
             "checked": len(shows),
             "renewed": renewed,
@@ -457,8 +514,11 @@ class AutoRenew(_PluginBase):
         self.__post("【自动续订】本轮续订汇总", "\n".join(lines))
 
     # ------------------------------------------------------- 媒体库 / TMDB
-    def __library_seasons(self, tmdbid: int) -> Dict[int, int]:
-        """从宿主 `mediaserveritem` 读某剧各季的入库集数（in-process ORM）。
+    def __library_map(self) -> Dict[str, Dict[int, int]]:
+        """一次性读出全库剧集：`{tmdbid: {季号: 集数}}`。
+
+        名单有几十部时，若每部都单独 `MediaServerItem.list(db)`，就会把整张表
+        扫几十遍 —— 这是 `/shows` 变慢的主因之一。调用方**读一次、循环里复用**。
 
         ⚠️ 该表真实取值：`item_type` 是**中文**「电视剧」，`seasoninfo` 是
         **JSON 字符串**而不是 dict —— 解析逻辑集中在 `core/library.py`。
@@ -469,21 +529,24 @@ class AutoRenew(_PluginBase):
         except Exception as err:  # noqa: BLE001
             logger.error(f"自动续订：读取媒体库失败：{err}")
             return {}
+        return {str(c["tmdbid"]): c["seasons"] for c in library_candidates(items)}
 
-        target = str(tmdbid)
-        for item in items:
-            if str(getattr(item, "item_type", "") or "").strip() != MEDIA_TYPE_TV:
-                continue
-            if str(getattr(item, "media_id", "") or "") != target:
-                continue
-            return parse_seasoninfo(getattr(item, "seasoninfo", None))
-        return {}
+    def __library_seasons(self, tmdbid: int) -> Dict[int, int]:
+        """单剧查询（详情弹窗用）；循环里请用 `__library_map()` 读一次复用。"""
+        return self.__library_map().get(str(tmdbid), {})
 
-    def __refresh_show(self, show: TrackedShow) -> Tuple[TrackedShow, List[Dict[str, Any]]]:
+    def __refresh_show(
+        self,
+        show: TrackedShow,
+        library: Optional[Dict[str, Dict[int, int]]] = None,
+    ) -> Tuple[TrackedShow, List[Dict[str, Any]]]:
         """拉一次 TMDB，把元数据写回追踪记录，并返回季列表。
 
         列表接口因此可以**纯本地渲染**：不这样做的话 `/shows` 会变成
         「每部剧一次 TMDB 调用」（实测 38 部 ≈ 10.7s，页面加载不可接受）。
+
+        `library` 传 `__library_map()` 的结果（批量场景复用同一次库读取），
+        顺手算出已完结卡片要显示的「x/y 季」。
         """
         if not self._tmdb:
             return show, []
@@ -495,6 +558,9 @@ class AutoRenew(_PluginBase):
         latest = latest_season(seasons)
         show.latest_season = (latest or {}).get("season_number")
         show.latest_season_episodes = (latest or {}).get("episode_count")
+        stats = season_stats(seasons, library=(library or {}).get(str(show.tmdbid), {}))
+        show.library_seasons = stats["library"]
+        show.total_seasons = stats["total"]
         show.last_checked_at = _now()
         return show, seasons
 
@@ -578,7 +644,8 @@ class AutoRenew(_PluginBase):
                     source=SOURCE_MANUAL,
                     poster_path=payload.get("poster_path"),
                     added_at=_now(),
-                )
+                ),
+                self.__library_map(),
             )[0]
         )
         logger.info(f"自动续订：手动加入追踪「{title}」第 {season_no} 季")
@@ -742,7 +809,10 @@ class AutoRenew(_PluginBase):
         rows, error, _ = self.__library_rows()
         if error:
             return {"success": False, "message": error}
-        by_id = {c["tmdbid"]: c for c in library_candidates(rows)}
+        candidates = library_candidates(rows)
+        by_id = {c["tmdbid"]: c for c in candidates}
+        # 库信息这份就已经拿到了，顺手复用给 x/y 季的统计，别再去读一次表
+        library = {str(c["tmdbid"]): c["seasons"] for c in candidates}
 
         added, upgraded, skipped = 0, 0, 0
         for tmdbid in add_ids:
@@ -767,7 +837,8 @@ class AutoRenew(_PluginBase):
                         season=candidate["season"],
                         source=SOURCE_LIBRARY,
                         added_at=_now(),
-                    )
+                    ),
+                    library,
                 )[0]
             )
             added += 1
@@ -813,10 +884,11 @@ class AutoRenew(_PluginBase):
         shows = self._store.list_all() if self._store else []
         targets = shows if scope == "all" else [s for s in shows if is_terminal(s.tmdb_status)]
 
+        library = self.__library_map()
         refreshed, failed = 0, 0
         for show in targets:
             try:
-                updated, _ = self.__refresh_show(show)
+                updated, _ = self.__refresh_show(show, library)
                 self._store.upsert(updated)
                 refreshed += 1
             except Exception as err:  # noqa: BLE001

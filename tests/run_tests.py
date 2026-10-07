@@ -48,6 +48,8 @@ from autorenew_core.renewal import (  # noqa: E402
     decide_renewal,
     first_uncovered_season,
     latest_season,
+    season_stats,
+    should_notify,
 )
 from autorenew_core.store import WatchlistStore  # noqa: E402
 
@@ -577,6 +579,80 @@ def test_month_grid_sorts_events_within_a_day():
     got = build_month_grid(2026, 10, [_ev("2026-10-20", "B", 2), _ev("2026-10-20", "A", 1)])
     cell = [c for w in got["weeks"] for c in w if c["date"] == "2026-10-20"][0]
     assert [e["title"] for e in cell["events"]] == ["A", "B"], cell
+
+
+# --------------------------------------------------------------------------
+# 季数统计：已完结区「x/y季」
+# --------------------------------------------------------------------------
+
+
+@case
+def test_season_stats_excludes_specials_from_total():
+    """特别季 S0 一律不计入总季数。"""
+    got = season_stats(_seasons((0, 5), (1, 8), (2, 10)), library={1})
+    assert got["total"] == 2, got
+    assert got["library"] == 1, got
+
+
+@case
+def test_season_stats_total_is_season_count_not_max_number():
+    """y 是「季的个数」而不是最大季号 —— 缺号时两者不等（1/2/5 应为 3 而不是 5）。"""
+    got = season_stats(_seasons((1, 8), (2, 10), (5, 6)), library={1, 2})
+    assert got["total"] == 3, got
+    assert got["library"] == 2, got
+
+
+@case
+def test_season_stats_library_ignores_seasons_tmdb_does_not_know():
+    """库里多出来的季（S0、幽灵季）不算进 x，也不能让 x 超过 y。"""
+    got = season_stats(_seasons((1, 8), (2, 10)), library={0, 1, 9})
+    assert got["library"] == 1, got
+    assert got["total"] == 2, got
+
+
+@case
+def test_season_stats_accepts_string_season_numbers():
+    """库内季号来自 `seasoninfo` 的 JSON 键，可能是字符串。"""
+    got = season_stats(_seasons((1, 8), (2, 10)), library={"1", "2"})
+    assert got["library"] == 2, got
+
+
+@case
+def test_season_stats_handles_empty_and_junk():
+    assert season_stats([], library={1}) == {"library": 0, "total": 0}
+    assert season_stats(None, library=None) == {"library": 0, "total": 0}
+    assert season_stats(None, library={"x", None}) == {"library": 0, "total": 0}
+    junk = [{"season_number": None}, {"season_number": "2", "episode_count": 3}]
+    assert season_stats(junk, library={2}) == {"library": 1, "total": 1}
+
+
+# --------------------------------------------------------------------------
+# 通知去重：同一部剧的同一季只提醒一次
+# --------------------------------------------------------------------------
+
+
+@case
+def test_should_notify_first_time_for_a_season():
+    assert should_notify(2, None) is True
+    assert should_notify(2, 0) is True
+
+
+@case
+def test_should_notify_skips_already_notified_season():
+    """仅提醒模式下 `show.season` 永不推进，不去重就会每 6h 重复轰炸。"""
+    assert should_notify(2, 2) is False
+    assert should_notify(2, 3) is False
+
+
+@case
+def test_should_notify_when_a_higher_season_appears():
+    assert should_notify(3, 2) is True
+
+
+@case
+def test_should_notify_without_season_is_false():
+    assert should_notify(None, None) is False
+    assert should_notify(0, None) is False
 
 
 # --------------------------------------------------------------------------

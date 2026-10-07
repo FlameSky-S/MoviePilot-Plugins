@@ -283,6 +283,14 @@ function badgeColor(badge) {
   return ''
 }
 
+/** 已完结区「x/y 季」的配色：季齐了=绿，缺季=橙（缺的才值得你去补）。 */
+function seasonProgressColor(show) {
+  const total = Number(show?.total_seasons || 0)
+  const have = Number(show?.library_seasons || 0)
+  if (!total) return undefined
+  return have >= total ? 'success' : 'warning'
+}
+
 onMounted(load)
 
 defineExpose({ load, loading })
@@ -407,7 +415,12 @@ defineExpose({ load, loading })
                 location="top"
               >
                 <template #activator="{ props: switchProps }">
-                  <!-- ms-n2 抵掉 VSwitch 自带的左内缩，让轨道左缘与上方文字对齐 -->
+                  <!--
+                    ms-1（+4px）：VSwitch 渲染出的轨道左缘比控件框靠左 4px，而
+                    控件框本身又在卡片左内边距上 —— 实测轨道会比上方文字列偏左
+                    12px。+4px 后轨道左缘正好落在文字列的左缘上。
+                    （别用 ms-n2：那是往左推，会偏得更狠。）
+                  -->
                   <VSwitch
                     v-bind="switchProps"
                     :model-value="show.auto_renew"
@@ -415,7 +428,7 @@ defineExpose({ load, loading })
                     density="compact"
                     hide-details
                     label="续订"
-                    class="ms-n2"
+                    class="ms-1"
                     @click.stop
                     @update:model-value="toggleRenew(show)"
                   />
@@ -466,9 +479,18 @@ defineExpose({ load, loading })
             <VCard class="h-100" variant="tonal" style="opacity: 0.6" @click="openDetail(show)">
               <VCardText class="pa-2">
                 <div class="text-body-2 text-truncate">{{ show.title }}</div>
-                <VChip size="x-small" variant="tonal" class="mt-1">
-                  {{ show.status_label }}
-                </VChip>
+                <div class="d-flex align-center flex-wrap ga-1 mt-1">
+                  <VChip size="x-small" variant="tonal">{{ show.status_label }}</VChip>
+                  <!-- x = 磁盘上有的季数，y = 总季数（都不含特别季 S0） -->
+                  <VChip
+                    v-if="show.total_seasons"
+                    size="x-small"
+                    variant="tonal"
+                    :color="seasonProgressColor(show)"
+                  >
+                    {{ show.library_seasons }}/{{ show.total_seasons }} 季
+                  </VChip>
+                </div>
               </VCardText>
             </VCard>
           </VCol>

@@ -62,6 +62,11 @@ class TrackedShow:
     poster_path: Optional[str] = None
     latest_season: Optional[int] = None
     latest_season_episodes: Optional[int] = None
+    # 已完结区「x/y 季」：x=库内已有季数，y=TMDB 总季数（都不含特别季 S0）
+    library_seasons: int = 0
+    total_seasons: int = 0
+    # 通知水位线：已经提醒过的最高季，避免仅提醒模式下每轮重发
+    notified_season: Optional[int] = None
     next_episode_air_date: Optional[str] = None
     last_checked_at: Optional[str] = None
     added_at: Optional[str] = None

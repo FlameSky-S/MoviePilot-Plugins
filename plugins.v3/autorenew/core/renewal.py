@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from .models import TrackedShow
 
@@ -57,6 +57,48 @@ def first_uncovered_season(
         if item["season_number"] > tracked_season:
             return item
     return None
+
+
+def season_stats(
+    seasons: Optional[Sequence[Dict[str, Any]]],
+    library: Optional[Iterable[Any]] = None,
+) -> Dict[str, int]:
+    """算「库内已有季数 x / TMDB 总季数 y」，用于已完结卡片的「x/y 季」。
+
+    两个容易答错的点（都已用测试钉死）：
+
+    - **y 是「季的个数」而不是最大季号** —— 缺号时两者不等（1/2/5 应为 3）。
+      别拿 `latest_season()` 的结果当总季数。
+    - **x 只统计 TMDB 也认可的季**：库里的特别季 S0、以及 TMDB 上不存在的
+      幽灵季都不算，且天然以 y 为上限（x ≤ y）。
+    """
+    numbers = {int(item["season_number"]) for item in _normalize_seasons(seasons)}
+    have: set[int] = set()
+    for raw in library or ():
+        try:
+            have.add(int(raw))
+        except (TypeError, ValueError):
+            continue
+    return {"library": len(numbers & have), "total": len(numbers)}
+
+
+def should_notify(season: Optional[int], notified_season: Optional[int]) -> bool:
+    """同一部剧的同一季只提醒一次。
+
+    必要性：**仅提醒模式下 `show.season` 永不推进**（不建订阅就不会 advance），
+    没有这个水位线的话每次轮询都会把同一部剧重发一遍。
+    """
+    try:
+        target = int(season)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return False
+    if target <= 0:
+        return False
+    try:
+        done = int(notified_season)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        done = 0
+    return target > done
 
 
 def decide_renewal(

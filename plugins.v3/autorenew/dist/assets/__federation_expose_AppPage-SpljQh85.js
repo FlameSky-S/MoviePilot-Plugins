@@ -16,39 +16,40 @@ const _hoisted_6 = {
 const _hoisted_7 = { class: "d-flex align-center flex-wrap ga-2 mb-2" };
 const _hoisted_8 = { class: "text-subtitle-2" };
 const _hoisted_9 = { class: "text-body-2 text-truncate" };
-const _hoisted_10 = { class: "autorenew-fab-host" };
-const _hoisted_11 = { class: "d-flex align-center ga-1" };
-const _hoisted_12 = { class: "autorenew-cal-title" };
-const _hoisted_13 = { class: "autorenew-cal-weekdays" };
-const _hoisted_14 = { class: "autorenew-cal-daynum" };
-const _hoisted_15 = {
+const _hoisted_10 = { class: "d-flex align-center flex-wrap ga-1 mt-1" };
+const _hoisted_11 = { class: "autorenew-fab-host" };
+const _hoisted_12 = { class: "d-flex align-center ga-1" };
+const _hoisted_13 = { class: "autorenew-cal-title" };
+const _hoisted_14 = { class: "autorenew-cal-weekdays" };
+const _hoisted_15 = { class: "autorenew-cal-daynum" };
+const _hoisted_16 = {
   key: 0,
   class: "autorenew-cal-todaynum"
 };
-const _hoisted_16 = { key: 1 };
-const _hoisted_17 = { class: "autorenew-cal-events" };
-const _hoisted_18 = ["title", "onClick"];
-const _hoisted_19 = { class: "autorenew-cal-eventtext" };
-const _hoisted_20 = { class: "autorenew-cal-eventtitle" };
-const _hoisted_21 = { class: "autorenew-cal-eventmeta" };
-const _hoisted_22 = {
+const _hoisted_17 = { key: 1 };
+const _hoisted_18 = { class: "autorenew-cal-events" };
+const _hoisted_19 = ["title", "onClick"];
+const _hoisted_20 = { class: "autorenew-cal-eventtext" };
+const _hoisted_21 = { class: "autorenew-cal-eventtitle" };
+const _hoisted_22 = { class: "autorenew-cal-eventmeta" };
+const _hoisted_23 = {
   key: 0,
   class: "autorenew-cal-more"
 };
-const _hoisted_23 = {
+const _hoisted_24 = {
   key: 1,
   class: "text-caption text-medium-emphasis mt-2"
 };
-const _hoisted_24 = { class: "text-caption text-medium-emphasis mb-2" };
-const _hoisted_25 = { class: "d-flex flex-wrap ga-2" };
-const _hoisted_26 = ["onClick"];
-const _hoisted_27 = { class: "autorenew-cal-eventtext" };
-const _hoisted_28 = { class: "autorenew-cal-eventtitle" };
-const _hoisted_29 = { class: "autorenew-cal-eventmeta" };
-const _hoisted_30 = { class: "text-caption text-medium-emphasis mb-3" };
-const _hoisted_31 = { class: "text-subtitle-2 mb-1" };
-const _hoisted_32 = { class: "text-caption text-medium-emphasis" };
-const _hoisted_33 = { class: "text-subtitle-2 mb-1" };
+const _hoisted_25 = { class: "text-caption text-medium-emphasis mb-2" };
+const _hoisted_26 = { class: "d-flex flex-wrap ga-2" };
+const _hoisted_27 = ["onClick"];
+const _hoisted_28 = { class: "autorenew-cal-eventtext" };
+const _hoisted_29 = { class: "autorenew-cal-eventtitle" };
+const _hoisted_30 = { class: "autorenew-cal-eventmeta" };
+const _hoisted_31 = { class: "text-caption text-medium-emphasis mb-3" };
+const _hoisted_32 = { class: "text-subtitle-2 mb-1" };
+const _hoisted_33 = { class: "text-caption text-medium-emphasis" };
+const _hoisted_34 = { class: "text-subtitle-2 mb-1" };
 
 const {computed,onMounted,ref} = await importShared('vue');
 
@@ -338,6 +339,14 @@ function badgeColor(badge) {
   return ''
 }
 
+/** 已完结区「x/y 季」的配色：季齐了=绿，缺季=橙（缺的才值得你去补）。 */
+function seasonProgressColor(show) {
+  const total = Number(show?.total_seasons || 0);
+  const have = Number(show?.library_seasons || 0);
+  if (!total) return undefined
+  return have >= total ? 'success' : 'warning'
+}
+
 onMounted(load);
 
 __expose({ load, loading });
@@ -578,7 +587,7 @@ return (_ctx, _cache) => {
                                 density: "compact",
                                 "hide-details": "",
                                 label: "续订",
-                                class: "ms-n2",
+                                class: "ms-1",
                                 onClick: _cache[3] || (_cache[3] = _withModifiers(() => {}, ["stop"])),
                                 "onUpdate:modelValue": $event => (toggleRenew(show))
                               }), null, 16, ["model-value", "disabled", "onUpdate:modelValue"])
@@ -662,16 +671,30 @@ return (_ctx, _cache) => {
                             _createVNode(_component_VCardText, { class: "pa-2" }, {
                               default: _withCtx(() => [
                                 _createElementVNode("div", _hoisted_9, _toDisplayString(show.title), 1),
-                                _createVNode(_component_VChip, {
-                                  size: "x-small",
-                                  variant: "tonal",
-                                  class: "mt-1"
-                                }, {
-                                  default: _withCtx(() => [
-                                    _createTextVNode(_toDisplayString(show.status_label), 1)
-                                  ]),
-                                  _: 2
-                                }, 1024)
+                                _createElementVNode("div", _hoisted_10, [
+                                  _createVNode(_component_VChip, {
+                                    size: "x-small",
+                                    variant: "tonal"
+                                  }, {
+                                    default: _withCtx(() => [
+                                      _createTextVNode(_toDisplayString(show.status_label), 1)
+                                    ]),
+                                    _: 2
+                                  }, 1024),
+                                  (show.total_seasons)
+                                    ? (_openBlock(), _createBlock(_component_VChip, {
+                                        key: 0,
+                                        size: "x-small",
+                                        variant: "tonal",
+                                        color: seasonProgressColor(show)
+                                      }, {
+                                        default: _withCtx(() => [
+                                          _createTextVNode(_toDisplayString(show.library_seasons) + "/" + _toDisplayString(show.total_seasons) + " 季 ", 1)
+                                        ]),
+                                        _: 2
+                                      }, 1032, ["color"]))
+                                    : _createCommentVNode("", true)
+                                ])
                               ]),
                               _: 2
                             }, 1024)
@@ -691,7 +714,7 @@ return (_ctx, _cache) => {
       _: 1
     }),
     (_openBlock(), _createBlock(_Teleport, { to: "body" }, [
-      _createElementVNode("div", _hoisted_10, [
+      _createElementVNode("div", _hoisted_11, [
         _createVNode(_component_VMenu, {
           modelValue: fabOpen.value,
           "onUpdate:modelValue": _cache[5] || (_cache[5] = $event => ((fabOpen).value = $event)),
@@ -973,14 +996,14 @@ return (_ctx, _cache) => {
                 _createElementVNode("span", { class: "text-subtitle-1" }, "播出日历", -1)
               ]))]),
               append: _withCtx(() => [
-                _createElementVNode("div", _hoisted_11, [
+                _createElementVNode("div", _hoisted_12, [
                   _createVNode(_component_VBtn, {
                     icon: "mdi-chevron-left",
                     variant: "text",
                     size: "small",
                     onClick: _cache[11] || (_cache[11] = $event => (shiftCalendar(-1)))
                   }),
-                  _createElementVNode("div", _hoisted_12, _toDisplayString(calendarTitle.value), 1),
+                  _createElementVNode("div", _hoisted_13, _toDisplayString(calendarTitle.value), 1),
                   _createVNode(_component_VBtn, {
                     icon: "mdi-chevron-right",
                     variant: "text",
@@ -1012,7 +1035,7 @@ return (_ctx, _cache) => {
                       class: "mb-2"
                     }))
                   : _createCommentVNode("", true),
-                _createElementVNode("div", _hoisted_13, [
+                _createElementVNode("div", _hoisted_14, [
                   (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(calendarGrid.value?.weekday_headers || [], (label, index) => {
                     return (_openBlock(), _createElementBlock("div", {
                       key: label,
@@ -1034,12 +1057,12 @@ return (_ctx, _cache) => {
                 'has-events': cell.events.length,
               }])
                       }, [
-                        _createElementVNode("div", _hoisted_14, [
+                        _createElementVNode("div", _hoisted_15, [
                           (cell.is_today)
-                            ? (_openBlock(), _createElementBlock("span", _hoisted_15, _toDisplayString(cell.day), 1))
-                            : (_openBlock(), _createElementBlock("span", _hoisted_16, _toDisplayString(cell.day), 1))
+                            ? (_openBlock(), _createElementBlock("span", _hoisted_16, _toDisplayString(cell.day), 1))
+                            : (_openBlock(), _createElementBlock("span", _hoisted_17, _toDisplayString(cell.day), 1))
                         ]),
-                        _createElementVNode("div", _hoisted_17, [
+                        _createElementVNode("div", _hoisted_18, [
                           (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(visibleEvents(cell), (event) => {
                             return (_openBlock(), _createElementBlock("div", {
                               key: `${cell.date}-${event.tmdbid}`,
@@ -1054,14 +1077,14 @@ return (_ctx, _cache) => {
                                 cover: "",
                                 class: "autorenew-cal-poster bg-grey-darken-3"
                               }, null, 8, ["src"]),
-                              _createElementVNode("div", _hoisted_19, [
-                                _createElementVNode("div", _hoisted_20, _toDisplayString(event.title), 1),
-                                _createElementVNode("div", _hoisted_21, "S" + _toDisplayString(event.season), 1)
+                              _createElementVNode("div", _hoisted_20, [
+                                _createElementVNode("div", _hoisted_21, _toDisplayString(event.title), 1),
+                                _createElementVNode("div", _hoisted_22, "S" + _toDisplayString(event.season), 1)
                               ])
-                            ], 8, _hoisted_18))
+                            ], 8, _hoisted_19))
                           }), 128)),
                           (cell.events.length > CAL_MAX_PER_DAY)
-                            ? (_openBlock(), _createElementBlock("div", _hoisted_22, " +" + _toDisplayString(cell.events.length - CAL_MAX_PER_DAY) + " 部 ", 1))
+                            ? (_openBlock(), _createElementBlock("div", _hoisted_23, " +" + _toDisplayString(cell.events.length - CAL_MAX_PER_DAY) + " 部 ", 1))
                             : _createCommentVNode("", true)
                         ])
                       ], 2))
@@ -1069,7 +1092,7 @@ return (_ctx, _cache) => {
                   ]))
                 }), 128)),
                 (!calendarLoading.value && !calendarGrid.value?.events_total)
-                  ? (_openBlock(), _createElementBlock("div", _hoisted_23, " 本月没有已确认的播出。TMDB 尚未公布下一集日期的剧不会出现在这里；可以用左右箭头查看其它月份。 "))
+                  ? (_openBlock(), _createElementBlock("div", _hoisted_24, " 本月没有已确认的播出。TMDB 尚未公布下一集日期的剧不会出现在这里；可以用左右箭头查看其它月份。 "))
                   : _createCommentVNode("", true)
               ]),
               _: 1
@@ -1079,8 +1102,8 @@ return (_ctx, _cache) => {
                   _createVNode(_component_VDivider),
                   _createVNode(_component_VCardText, { class: "pa-3" }, {
                     default: _withCtx(() => [
-                      _createElementVNode("div", _hoisted_24, " 接下来（共 " + _toDisplayString(calendarUpcomingTotal.value) + " 集） ", 1),
-                      _createElementVNode("div", _hoisted_25, [
+                      _createElementVNode("div", _hoisted_25, " 接下来（共 " + _toDisplayString(calendarUpcomingTotal.value) + " 集） ", 1),
+                      _createElementVNode("div", _hoisted_26, [
                         (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(calendarUpcoming.value, (event) => {
                           return (_openBlock(), _createElementBlock("div", {
                             key: `up-${event.date}-${event.tmdbid}`,
@@ -1094,11 +1117,11 @@ return (_ctx, _cache) => {
                               cover: "",
                               class: "autorenew-cal-poster bg-grey-darken-3"
                             }, null, 8, ["src"]),
-                            _createElementVNode("div", _hoisted_27, [
-                              _createElementVNode("div", _hoisted_28, _toDisplayString(event.title), 1),
-                              _createElementVNode("div", _hoisted_29, _toDisplayString(_unref(formatDate)(event.date)) + " · S" + _toDisplayString(event.season), 1)
+                            _createElementVNode("div", _hoisted_28, [
+                              _createElementVNode("div", _hoisted_29, _toDisplayString(event.title), 1),
+                              _createElementVNode("div", _hoisted_30, _toDisplayString(_unref(formatDate)(event.date)) + " · S" + _toDisplayString(event.season), 1)
                             ])
-                          ], 8, _hoisted_26))
+                          ], 8, _hoisted_27))
                         }), 128))
                       ])
                     ]),
@@ -1169,7 +1192,7 @@ return (_ctx, _cache) => {
                   color: "primary",
                   disabled: importBusy.value
                 }, null, 8, ["modelValue", "disabled"]),
-                _createElementVNode("div", _hoisted_30, [
+                _createElementVNode("div", _hoisted_31, [
                   _cache[36] || (_cache[36] = _createTextVNode(" 宿主每 6 小时自动同步一次媒体库；打开这项会立刻跑一遍全库同步（较慢）， 这样「已从库里删除的剧」也能马上被识别出来。 ", -1)),
                   (importPreview.value?.last_sync)
                     ? (_openBlock(), _createElementBlock(_Fragment, { key: 0 }, [
@@ -1187,9 +1210,9 @@ return (_ctx, _cache) => {
                   : _createCommentVNode("", true),
                 (importPreview.value)
                   ? (_openBlock(), _createElementBlock(_Fragment, { key: 1 }, [
-                      _createElementVNode("div", _hoisted_31, [
+                      _createElementVNode("div", _hoisted_32, [
                         _createTextVNode(" 将新增 " + _toDisplayString(importPreview.value.added.length) + " 部 ", 1),
-                        _createElementVNode("span", _hoisted_32, " （库内共 " + _toDisplayString(importPreview.value.library_total) + " 部，名单内已有 " + _toDisplayString(importPreview.value.kept) + " 部） ", 1)
+                        _createElementVNode("span", _hoisted_33, " （库内共 " + _toDisplayString(importPreview.value.library_total) + " 部，名单内已有 " + _toDisplayString(importPreview.value.kept) + " 部） ", 1)
                       ]),
                       (importPreview.value.added.length)
                         ? (_openBlock(), _createBlock(_component_VList, {
@@ -1232,7 +1255,7 @@ return (_ctx, _cache) => {
                             ]))]),
                             _: 1
                           })),
-                      _createElementVNode("div", _hoisted_33, "将移除 " + _toDisplayString(importPreview.value.removed.length) + " 部", 1),
+                      _createElementVNode("div", _hoisted_34, "将移除 " + _toDisplayString(importPreview.value.removed.length) + " 部", 1),
                       _cache[39] || (_cache[39] = _createElementVNode("div", { class: "text-caption text-medium-emphasis mb-2" }, " 只列出「来源 = 媒体库导入」且现在库里已找不到的剧；手动添加、订阅同步进来的永不在此列。 ", -1)),
                       (importPreview.value.removed.length)
                         ? (_openBlock(), _createBlock(_component_VList, {
@@ -1317,6 +1340,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-62349f1c"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-ca80fb09"]]);
 
 export { AppPage as default };
