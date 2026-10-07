@@ -79,7 +79,7 @@ class AutoRenew(_PluginBase):
     plugin_name = "自动续订"
     plugin_desc = "长期追踪电视剧：TMDB 上出现新一季就自动建订阅。提供 Sonarr 式状态标签、季进度与播出日历。"
     plugin_icon = "AutoRenew.png"
-    plugin_version = "1.0.6"
+    plugin_version = "1.0.7"
     plugin_author = "FlameSky-S"
     author_url = "https://github.com/FlameSky-S"
     plugin_config_prefix = "autorenew_"
@@ -525,12 +525,17 @@ class AutoRenew(_PluginBase):
         `插件数据查询服务尚未配置`），拿不到就当没有这一级，绝不能因此中断建订阅。
         """
         target = str(show.tmdbid)
+        # ⚠️ SDK 过滤器要求 media_source 与 media_id **必须同时提供**，
+        # 只给 media_id 会直接 pydantic validation error（实测踩过：这一级等于永远失效）。
+        # 本插件建的订阅 media_source 固定是 TMDB。
+        media_source = getattr(MediaSource, "TMDB", None) or getattr(MediaSource, "THETMDB", None)
+        query = {"media_source": media_source, "media_id": target}
         for label, fetch in (
             ("活跃订阅", sdk_queries.list_subscriptions),
             ("订阅历史", sdk_queries.list_subscription_history),
         ):
             try:
-                page = fetch({"media_id": target})
+                page = fetch(query)
             except Exception as err:  # noqa: BLE001
                 logger.warn(f"自动续订：读取{label}失败，跳过该级回退：{err}")
                 continue
