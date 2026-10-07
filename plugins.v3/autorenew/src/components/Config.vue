@@ -248,10 +248,9 @@ defineExpose({ load: loadStatus })
         {{ configuredRuleCount ? `已配 ${configuredRuleCount} 项` : '全部跟随 MoviePilot 全局' }}
       </VChip>
     </div>
-    <div class="text-caption text-medium-emphasis mb-2">
+    <div class="text-caption text-medium-emphasis mb-3">
       新建订阅按三级回退取值：<strong>该剧已有订阅的参数 → 这里的设置 → MoviePilot 全局默认</strong>。
-      留空的项目<strong>不写进订阅</strong>，由 MoviePilot 用自己的全局默认兜底（当前实测全局：
-      过滤规则组 <code>电影 / 电视剧</code>、订阅站点用「订阅设置」里的范围、不开洗版）。
+      留空的项目<strong>不写进订阅</strong>，由 MoviePilot 用自己的全局默认兜底。
     </div>
 
     <VRow dense>
@@ -368,6 +367,22 @@ defineExpose({ load: loadStatus })
 
 <style scoped>
 .autorenew-config {
-  padding: 4px 8px 8px;
+  padding: 6px 10px 14px;
+}
+
+/* 行距：之前用的 `dense` 让相邻控件紧贴在一起，观感很挤。
+   这里统一放开 —— 用 row-gap 而不是负 margin（负 margin 会把控件推偏，踩过）。 */
+.autorenew-config :deep(.v-row) {
+  row-gap: 16px;
+  margin-bottom: 8px;
+}
+
+.autorenew-config :deep(.v-row > .v-col) {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.autorenew-config :deep(.v-switch .v-label) {
+  opacity: 1;
 }
 </style>

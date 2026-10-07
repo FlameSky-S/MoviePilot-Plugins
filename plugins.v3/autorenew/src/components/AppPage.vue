@@ -94,12 +94,17 @@ async function toggleRenew(show) {
   }
 }
 
-/** 已完结区：重新拉 TMDB 元数据（万一那边又续订了，状态要能跟着变）。 */
+/** 已完结区：重新拉 TMDB 元数据，并先强制同步一次宿主媒体库。
+ *
+ *  为什么必须带 sync：卡片的「x/y 季」里 x 来自宿主的 mediaserveritem **缓存**，
+ *  那份缓存每 6h 才更新一次 —— 刚下载入库的剧会一直显示旧数字。
+ *  同步完再读，数字才是当下真实的。
+ */
 async function refreshEnded() {
   refreshingEnded.value = true
   error.value = ''
   try {
-    const res = unwrapResponse(await pluginApi.value.refresh({ scope: 'ended' }))
+    const res = unwrapResponse(await pluginApi.value.refresh({ scope: 'ended', sync: true }))
     message.value = res?.message || '已刷新'
     await load()
   } catch (err) {

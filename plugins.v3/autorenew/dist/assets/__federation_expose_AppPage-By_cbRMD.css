@@ -1,11 +1,11 @@
 
-.autorenew-app[data-v-ca80fb09] {
+.autorenew-app[data-v-60d11f02] {
   position: relative;
   min-height: 100%;
 }
 
 /* Teleport 到 body 后的锚点：钉在视口右下角；z-index 低于对话框（~2400）*/
-.autorenew-fab-host[data-v-ca80fb09] {
+.autorenew-fab-host[data-v-60d11f02] {
   position: fixed;
   right: 24px;
   bottom: 24px;
@@ -13,36 +13,36 @@
 }
 
 /* ---------------- 播出日历：月历网格 ---------------- */
-.autorenew-cal-title[data-v-ca80fb09] {
+.autorenew-cal-title[data-v-60d11f02] {
   min-width: 104px;
   text-align: center;
   font-weight: 600;
   font-size: 0.9rem;
 }
-.autorenew-cal-weekdays[data-v-ca80fb09],
-.autorenew-cal-week[data-v-ca80fb09] {
+.autorenew-cal-weekdays[data-v-60d11f02],
+.autorenew-cal-week[data-v-60d11f02] {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 4px;
 }
-.autorenew-cal-weekdays[data-v-ca80fb09] {
+.autorenew-cal-weekdays[data-v-60d11f02] {
   margin-bottom: 4px;
 }
-.autorenew-cal-week[data-v-ca80fb09] {
+.autorenew-cal-week[data-v-60d11f02] {
   margin-bottom: 4px;
 }
-.autorenew-cal-weekday[data-v-ca80fb09] {
+.autorenew-cal-weekday[data-v-60d11f02] {
   text-align: center;
   font-size: 0.72rem;
   letter-spacing: 0.08em;
   padding: 2px 0;
   opacity: 0.65;
 }
-.autorenew-cal-weekday.is-weekend[data-v-ca80fb09] {
+.autorenew-cal-weekday.is-weekend[data-v-60d11f02] {
   color: rgb(var(--v-theme-secondary));
   opacity: 0.9;
 }
-.autorenew-cal-cell[data-v-ca80fb09] {
+.autorenew-cal-cell[data-v-60d11f02] {
   min-height: 88px;
   padding: 4px 5px 5px;
   border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
@@ -53,23 +53,23 @@
   overflow: hidden;
   background: rgba(var(--v-theme-surface), 0.35);
 }
-.autorenew-cal-cell.is-out[data-v-ca80fb09] {
+.autorenew-cal-cell.is-out[data-v-60d11f02] {
   opacity: 0.34;
 }
-.autorenew-cal-cell.has-events[data-v-ca80fb09] {
+.autorenew-cal-cell.has-events[data-v-60d11f02] {
   background: rgba(var(--v-theme-primary), 0.06);
 }
-.autorenew-cal-cell.is-today[data-v-ca80fb09] {
+.autorenew-cal-cell.is-today[data-v-60d11f02] {
   border-color: rgb(var(--v-theme-primary));
   box-shadow: inset 0 0 0 1px rgb(var(--v-theme-primary));
 }
-.autorenew-cal-daynum[data-v-ca80fb09] {
+.autorenew-cal-daynum[data-v-60d11f02] {
   font-size: 0.72rem;
   line-height: 1.2;
   text-align: right;
   opacity: 0.85;
 }
-.autorenew-cal-todaynum[data-v-ca80fb09] {
+.autorenew-cal-todaynum[data-v-60d11f02] {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -80,14 +80,14 @@
   color: rgb(var(--v-theme-on-primary));
   font-weight: 700;
 }
-.autorenew-cal-events[data-v-ca80fb09] {
+.autorenew-cal-events[data-v-60d11f02] {
   display: flex;
   flex-direction: column;
   gap: 2px;
   overflow: hidden;
   min-height: 0;
 }
-.autorenew-cal-event[data-v-ca80fb09] {
+.autorenew-cal-event[data-v-60d11f02] {
   display: flex;
   gap: 4px;
   align-items: center;
@@ -96,34 +96,34 @@
   cursor: pointer;
   transition: background-color 0.15s;
 }
-.autorenew-cal-event[data-v-ca80fb09]:hover {
+.autorenew-cal-event[data-v-60d11f02]:hover {
   background: rgba(var(--v-theme-primary), 0.18);
 }
-.autorenew-cal-poster[data-v-ca80fb09] {
+.autorenew-cal-poster[data-v-60d11f02] {
   flex: none;
   border-radius: 3px;
 }
-.autorenew-cal-eventtext[data-v-ca80fb09] {
+.autorenew-cal-eventtext[data-v-60d11f02] {
   min-width: 0;
 }
-.autorenew-cal-eventtitle[data-v-ca80fb09] {
+.autorenew-cal-eventtitle[data-v-60d11f02] {
   font-size: 0.7rem;
   line-height: 1.15;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.autorenew-cal-eventmeta[data-v-ca80fb09] {
+.autorenew-cal-eventmeta[data-v-60d11f02] {
   font-size: 0.62rem;
   line-height: 1.1;
   opacity: 0.62;
 }
-.autorenew-cal-more[data-v-ca80fb09] {
+.autorenew-cal-more[data-v-60d11f02] {
   font-size: 0.62rem;
   opacity: 0.62;
   padding-left: 2px;
 }
-.autorenew-cal-upcoming[data-v-ca80fb09] {
+.autorenew-cal-upcoming[data-v-60d11f02] {
   display: flex;
   gap: 6px;
   align-items: center;
@@ -134,7 +134,7 @@
   cursor: pointer;
   transition: border-color 0.15s, background-color 0.15s;
 }
-.autorenew-cal-upcoming[data-v-ca80fb09]:hover {
+.autorenew-cal-upcoming[data-v-60d11f02]:hover {
   border-color: rgb(var(--v-theme-primary));
   background: rgba(var(--v-theme-primary), 0.08);
 }

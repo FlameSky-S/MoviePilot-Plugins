@@ -48,6 +48,7 @@ from autorenew_core.renewal import (  # noqa: E402
     decide_renewal,
     first_uncovered_season,
     latest_season,
+    season_numbers,
     season_stats,
     should_notify,
 )
@@ -802,6 +803,31 @@ def test_rule_payload_output_is_a_valid_fallback_level():
     level = rule_payload({"rules_quality": "WEB-DL"})
     got = merge_rules([{}, level, {"quality": "4K"}])
     assert got == {"quality": "WEB-DL"}, got
+
+
+@case
+def test_season_numbers_drops_specials_and_sorts():
+    """持久化用的季号列表：去掉特别季 S0、按升序，脏值丢弃。"""
+    got = season_numbers(
+        [
+            {"season_number": 0, "episode_count": 5},
+            {"season_number": 2, "episode_count": 8},
+            {"season_number": 1, "episode_count": 10},
+            {"season_number": "x"},
+            {},
+        ]
+    )
+    assert got == [1, 2], got
+    assert season_numbers(None) == []
+
+
+@case
+def test_season_numbers_roundtrip_reproduces_season_stats():
+    """页面现场重算拿到的结果，必须和联网刷新时算的一模一样。"""
+    seasons = [{"season_number": 1}, {"season_number": 2}, {"season_number": 3}]
+    direct = season_stats(seasons, [1, 3])
+    rebuilt = season_stats([{"season_number": n} for n in season_numbers(seasons)], [1, 3])
+    assert direct == rebuilt == {"library": 2, "total": 3}, (direct, rebuilt)
 
 
 # --------------------------------------------------------------------------

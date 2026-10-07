@@ -39,7 +39,13 @@ from .core.models import (
     is_terminal,
     status_label,
 )
-from .core.renewal import decide_renewal, latest_season, season_stats, should_notify
+from .core.renewal import (
+    decide_renewal,
+    latest_season,
+    season_numbers,
+    season_stats,
+    should_notify,
+)
 from .core.rules import RULE_FIELDS, merge_rules, rule_payload
 from .core.store import WatchlistStore
 from .core.tmdb import TmdbSeasonSource
@@ -73,7 +79,7 @@ class AutoRenew(_PluginBase):
     plugin_name = "自动续订"
     plugin_desc = "长期追踪电视剧：TMDB 上出现新一季就自动建订阅。提供 Sonarr 式状态标签、季进度与播出日历。"
     plugin_icon = "AutoRenew.png"
-    plugin_version = "1.0.5"
+    plugin_version = "1.0.6"
     plugin_author = "FlameSky-S"
     author_url = "https://github.com/FlameSky-S"
     plugin_config_prefix = "autorenew_"
@@ -437,7 +443,7 @@ class AutoRenew(_PluginBase):
                 # 没有水位线的话每轮都会把同一部剧重发一遍
                 if should_notify(decision.season, show.notified_season):
                     show.notified_season = int(decision.season or 0)
-                    self.__notify_renewal(show, decision.season, created=False)
+                    self.__notify_reminder(show, decision.season)
                 self._store.upsert(show)
                 waiting.append(
                     {"title": show.title, "season": decision.season, "reason": "仅提醒模式"}
@@ -453,7 +459,7 @@ class AutoRenew(_PluginBase):
                 show.notified_season = int(decision.season or 0)
                 self._store.upsert(show)
                 renewed.append({"title": show.title, "season": decision.season, "message": message})
-                self.__notify_renewal(show, decision.season, created=True)
+                # 不在这里逐条发通知：循环结束后的 __notify_summary 统一发一条
             else:
                 self._store.upsert(show)
                 waiting.append(
@@ -493,7 +499,7 @@ class AutoRenew(_PluginBase):
                 season=int(season),
                 media_source=media_source,
                 media_id=str(show.tmdbid),
-                message=self._notify,
+                message=False,  # 通知由插件自己发（避免与宿主那条「订阅成功」重复）
                 # 续订规则：宿主会把 kwargs 直接当成订阅行字段，
                 # 没出现在这里的字段它才会走自己的全局默认。
                 **rules,
@@ -553,17 +559,32 @@ class AutoRenew(_PluginBase):
         try:
             from app.schemas.types import NotificationType
 
-            self.post_message(mtype=NotificationType.Plugin, title=title, text=text)
+            # ⚠️ 用「订阅」而不是「插件」：宿主 `NotificationSwitchs` 里
+            # 「插件」的 action 是 admin（只推给管理员），「订阅」才是 all。
+            # 用 Plugin 的话，即便 notify 开着也可能推不到你手机上。
+            self.post_message(mtype=NotificationType.Subscribe, title=title, text=text)
         except Exception as err:  # noqa: BLE001
             logger.warn(f"自动续订：通知发送失败（不影响主流程）：{err}")
 
-    def __notify_renewal(self, show: TrackedShow, season: Optional[int], created: bool) -> None:
-        verb = "已自动创建订阅" if created else "检测到新季（仅提醒）"
-        self.__post(f"【自动续订】{show.title}", f"{show.title} 第 {season} 季{verb}")
+    def __notify_reminder(self, show: TrackedShow, season: Optional[int]) -> None:
+        self.__post(
+            f"【自动续订】{show.title}",
+            f"检测到《{show.title}》第 {season} 季，当前为「仅提醒」模式，未自动创建订阅。",
+        )
 
     def __notify_summary(self, renewed: List[Dict[str, Any]]) -> None:
-        lines = [f"{item['title']} → 第 {item['season']} 季" for item in renewed]
-        self.__post("【自动续订】本轮续订汇总", "\n".join(lines))
+        """自动建订阅后**只发这一条**。
+
+        建订阅时给宿主传了 `message=False`，宿主自己那条「订阅成功」通知会被压掉，
+        所以这里不会再重复；反过来也别在循环里逐条发 —— 一轮建 5 条就是 5 条消息。
+        """
+        if not renewed:
+            return
+        lines = [f"《{item['title']}》→ 第 {item['season']} 季" for item in renewed]
+        if len(lines) == 1:
+            self.__post("【自动续订】已自动创建订阅", lines[0])
+        else:
+            self.__post(f"【自动续订】本轮新建 {len(lines)} 条订阅", "\n".join(lines))
 
     # ------------------------------------------------------- 媒体库 / TMDB
     def __library_map(self) -> Dict[str, Dict[int, int]]:
@@ -613,6 +634,8 @@ class AutoRenew(_PluginBase):
         stats = season_stats(seasons, library=(library or {}).get(str(show.tmdbid), {}))
         show.library_seasons = stats["library"]
         show.total_seasons = stats["total"]
+        # 存下季号列表，之后每次渲染都不用联网就能重算「x/y 季」
+        show.tmdb_seasons = season_numbers(seasons)
         show.last_checked_at = _now()
         return show, seasons
 
@@ -658,6 +681,17 @@ class AutoRenew(_PluginBase):
 
     def api_list_shows(self, sort: str = "next_airing") -> List[Dict[str, Any]]:
         shows = self._store.list_all() if self._store else []
+        # 「x/y 季」现场重算：x 取自宿主的媒体库缓存，缓存一变页面就该跟上，
+        # 不能等下一次 TMDB 刷新（持久化的 tmdb_seasons 让这一步不用联网）。
+        library = self.__library_map()
+        for show in shows:
+            if show.tmdb_seasons:
+                stats = season_stats(
+                    [{"season_number": n} for n in show.tmdb_seasons],
+                    (library or {}).get(str(show.tmdbid), {}),
+                )
+                show.library_seasons = stats["library"]
+                show.total_seasons = stats["total"]
         payload = [self.__decorate(show) for show in shows]
 
         if sort == "recent":
@@ -926,16 +960,31 @@ class AutoRenew(_PluginBase):
         }
 
     def api_refresh(self, payload: dict = None) -> Dict[str, Any]:
-        """重新拉 TMDB 元数据并写回追踪记录。
+        """重新拉 TMDB 元数据并写回追踪记录，顺带重读媒体库算「x/y 季」。
 
-        `scope=ended`（默认）只刷已完结/已砍的，`scope=all` 刷全部。已完结区的刷新
-        按钮走这个：万一 TMDB 那边又续订了，状态标签与徽标要能跟着变。
+        `scope=ended`（默认）只刷已完结/已砍的，`scope=all` 刷全部。
+
+        `sync=true` 时**先强制跑一次宿主媒体库同步**再刷。为什么需要：
+        「x/y 季」里的 x 来自宿主的 `mediaserveritem` **缓存**，而那份缓存每
+        `MEDIASERVER_SYNC_INTERVAL`（默认 6h）才更新一次 —— 刚下载入库的剧会一直显示
+        旧数字。实测：绝望写手 S2/S3 于 09:32 入库，而当时的缓存快照是 04:22，
+        页面仍旧显示「1/5」。宿主**没有**任何 HTTP 接口能手动触发同步，但插件跑在宿主
+        进程内，可以直接调 `MediaServerChain.sync()`。
         """
         payload = payload or {}
         scope = str(payload.get("scope") or "ended").strip().lower()
+        raw_sync = payload.get("sync")
+        do_sync = raw_sync is True or str(raw_sync).strip().lower() in ("1", "true", "yes", "on")
+        sync_note = ""
+        synced = False
+        if do_sync:
+            synced, note = self.__sync_media_library()
+            sync_note = f"；{note}" if synced else f"；{note}（改按现有缓存刷新）"
+
         shows = self._store.list_all() if self._store else []
         targets = shows if scope == "all" else [s for s in shows if is_terminal(s.tmdb_status)]
 
+        # 注意顺序：同步之后再读库，否则拿到的还是同一份旧缓存
         library = self.__library_map()
         refreshed, failed = 0, 0
         for show in targets:
@@ -947,13 +996,19 @@ class AutoRenew(_PluginBase):
                 failed += 1
                 logger.error(f"自动续订：刷新「{show.title}」失败：{err}")
 
-        logger.info(f"自动续订：刷新 TMDB 元数据 scope={scope} 成功 {refreshed} 部，失败 {failed} 部")
+        logger.info(
+            f"自动续订：刷新 TMDB 元数据 scope={scope} 成功 {refreshed} 部，失败 {failed} 部"
+        )
         return {
             "success": True,
             "scope": scope,
+            "synced": synced,
             "refreshed": refreshed,
             "failed": failed,
-            "message": f"已刷新 {refreshed} 部的 TMDB 信息" + (f"，{failed} 部失败" if failed else ""),
+            "message": (
+                f"已刷新 {refreshed} 部的 TMDB 信息" + (f"，{failed} 部失败" if failed else "")
+            )
+            + sync_note,
         }
 
     def api_rule_options(self) -> Dict[str, Any]:

@@ -1,0 +1,7 @@
+
+.autorenew-config[data-v-a2d08b83] {
+  padding: 6px 10px 14px;
+}
+
+/* 行距：之前用的 `dense` 让相邻控件紧贴在一起，观感很挤。
+   这里统一放开 —— 用 row-gap 而不是负 margin（负 margin 会把控件推偏，踩过）。 */

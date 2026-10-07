@@ -65,6 +65,9 @@ class TrackedShow:
     # 已完结区「x/y 季」：x=库内已有季数，y=TMDB 总季数（都不含特别季 S0）
     library_seasons: int = 0
     total_seasons: int = 0
+    # TMDB 的季号列表（不含 S0）。持久化它，「x/y」才能每次渲染离线重算，
+    # 而不是只在联网刷新时才更新一次。
+    tmdb_seasons: List[int] = field(default_factory=list)
     # 通知水位线：已经提醒过的最高季，避免仅提醒模式下每轮重发
     notified_season: Optional[int] = None
     next_episode_air_date: Optional[str] = None

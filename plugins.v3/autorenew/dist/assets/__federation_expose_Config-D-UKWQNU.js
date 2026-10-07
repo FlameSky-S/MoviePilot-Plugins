@@ -371,14 +371,12 @@ return (_ctx, _cache) => {
         _: 1
       }, 8, ["color"])
     ]),
-    _cache[20] || (_cache[20] = _createElementVNode("div", { class: "text-caption text-medium-emphasis mb-2" }, [
+    _cache[20] || (_cache[20] = _createElementVNode("div", { class: "text-caption text-medium-emphasis mb-3" }, [
       _createTextVNode(" 新建订阅按三级回退取值："),
       _createElementVNode("strong", null, "该剧已有订阅的参数 → 这里的设置 → MoviePilot 全局默认"),
       _createTextVNode("。 留空的项目"),
       _createElementVNode("strong", null, "不写进订阅"),
-      _createTextVNode("，由 MoviePilot 用自己的全局默认兜底（当前实测全局： 过滤规则组 "),
-      _createElementVNode("code", null, "电影 / 电视剧"),
-      _createTextVNode("、订阅站点用「订阅设置」里的范围、不开洗版）。 ")
+      _createTextVNode("，由 MoviePilot 用自己的全局默认兜底。 ")
     ], -1)),
     _createVNode(_component_VRow, { dense: "" }, {
       default: _withCtx(() => [
@@ -591,6 +589,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Config = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-4660d60b"]]);
+const Config = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-a2d08b83"]]);
 
 export { Config as default };

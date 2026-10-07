@@ -82,6 +82,16 @@ def season_stats(
     return {"library": len(numbers & have), "total": len(numbers)}
 
 
+def season_numbers(seasons: Optional[Sequence[Dict[str, Any]]]) -> List[int]:
+    """TMDB 季号列表（已去掉特别季 S0）。
+
+    把它持久化到追踪记录上，就能**离线重算** `season_stats` —— 页面上「x/y 季」的 x
+    依赖宿主媒体库缓存，那份缓存随时会变；没有这个就不能在每次渲染时重算，
+    只能等下一次联网刷新。
+    """
+    return [item["season_number"] for item in _normalize_seasons(seasons)]
+
+
 def should_notify(season: Optional[int], notified_season: Optional[int]) -> bool:
     """同一部剧的同一季只提醒一次。
 
