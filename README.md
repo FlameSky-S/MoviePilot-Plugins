@@ -18,6 +18,7 @@ https://github.com/FlameSky-S/MoviePilot-Plugins
 | 插件 | ID | 说明 |
 | --- | --- | --- |
 | 自动续订 | `AutoRenew` | 长期追踪电视剧：TMDB 上一出现新一季就自动建订阅。Sonarr 式的状态标签、季进度与播出日历。 |
+| Prowlarr2MP | `Prowlarr2MP` | 把 Prowlarr 的索引器（公开 / 半公开 / 私有）桥接进 MoviePilot 搜索与下载。**改自 `mitlearn/MoviePilot-PluginsV2` 的 Prowlarr 索引器插件（v2.0.0）**。 |
 
 ### 自动续订（AutoRenew）
 
@@ -31,6 +32,18 @@ https://github.com/FlameSky-S/MoviePilot-Plugins
 
 细节见 [`plugins.v3/autorenew/README.md`](plugins.v3/autorenew/README.md)。
 
+### Prowlarr2MP
+
+把 Prowlarr 的索引器桥接进 MoviePilot 的搜索 / 订阅 / 下载。
+
+**来源：改自 [`mitlearn/MoviePilot-PluginsV2`](https://github.com/mitlearn/MoviePilot-PluginsV2) 的 Prowlarr 索引器插件（`plugins.v3`，v2.0.0；其又源自 `jtcymc/MoviePilot-PluginsV2`）**，改动有三处：
+
+1. **去掉公开站过滤** —— 原版对 `privacy == "public"` 的索引器直接跳过，本插件收录 public / semiPrivate / private 全部；
+2. **修「分类误伤」** —— 原版分类探测失败或无影视分类时整条丢弃索引器（公开站/冷门站最容易被误伤，表现为「站点莫名消失」），改为兜底 Torznab `2000`/`5000`；
+3. **对齐 v3.1.0 的 `TorrentInfo` 真实签名** —— 原版传 `imdbid=` 会 `TypeError`，异常被吞成「解析异常」→ 每条结果被丢弃（搜索恒 0）。
+
+站点沿用原版的**手动加站**模型（`SitesHelper.add_indexer` 注册 + 「站点管理」手动添加 `prowlarr2mp.<id>`），不写宿主站点库。**装完必须手动加站，否则搜不到**，步骤见 [`plugins.v3/prowlarr2mp/README.md`](plugins.v3/prowlarr2mp/README.md)。
+
 ## 仓库约定
 
 - 每个插件自带一套独立 Vite 工程（`vite.config.js` / `package.json` / `index.html` / `src/` 都在插件目录内，**无仓级 frontend workspace**）。
@@ -41,8 +54,10 @@ https://github.com/FlameSky-S/MoviePilot-Plugins
 ## 开发
 
 ```bash
-# 后端纯逻辑单测（不需要 MoviePilot 运行环境）
+# 后端纯逻辑单测（不需要 MoviePilot 运行环境；一个入口跑全部插件）
 python tests/run_tests.py
+# 只跑 Prowlarr2MP（往 sys.modules 塞假 app.* 的那套桩测试）
+python tests/prowlarr2mp/run_tests.py
 
 # 前端构建（产物需一并提交）
 cd plugins.v3/autorenew && npm install && npm run build

@@ -21,5 +21,22 @@
       "v1.0.7": "【修】三级回退的第一级从未生效：SDK 的过滤器（SubscriptionFilter / SubscriptionHistoryFilter）要求 `media_source` 与 `media_id` **同时**提供，只传 media_id 会直接 pydantic validation error —— 于是每次建订阅都白刷两条 WARNING 并静默跳到第二级，「沿用该剧已有订阅的参数」这个能力等于不存在（v1.0.5 引入）。现在两个字段一起传。实测方式：把「菜鸟老警」的已追踪季回拨一格触发一次真实续订（S9 已存在，幂等返回「订阅已存在」，不新建订阅），日志不再有 validation error，并顺带端到端验证了通知链路 —— `发送消息：mtype=<MessageType.Subscribe: '订阅'>` 确实发出，订阅数 6→6 未变，已追踪季自愈回 9。",
       "v1.0.8": "【新】播出日历精确到集：数据源从宿主的 `next_episode_to_air`（一部剧只有「下一集」一个日期）换成 TMDB 的每季集表，事件因此能显示 `S02E01`；同一天连播多集合并成 `S02E01-E08`（新增纯函数 `merge_day_episodes`，**只合并连续集号** —— 同一天出现 E01 和 E05 会拆成两个事件，谎报成 E01-E05 会让人以为中间几集也在那天播）。⚠️ `TmdbApi.get_tv_season_detail` 没有缓存装饰器（实测 `__wrapped__` 之类都不存在），插件侧补了 3 小时的进程内缓存，否则每次翻月要打几十个 TMDB 请求。已完结/已砍的剧直接跳过（不会再有新集）。日历弹窗 1040px→1560px，格子 88→124px，字号/海报/today 圆点同步放大，每格最多显示 4 条。【新】页面右上角增加「设置」按钮（在刷新按钮右侧），弹窗内**直接复用设置表单组件 Config.vue** —— 同一份代码，不会两处漂移；保存走后端新路由 `POST /config`（`_PluginBase.update_config` + 立即 `init_plugin`），保存即生效、不必等宿主重载。刷新与设置按钮都加了 tooltip（刷新：重新读取名单与状态，只读、不访问 TMDB）。【改】顶部统计：「追踪 X 部」改为**正在追踪**的数量（不含已完结/已砍区，与下方卡片数一致），新增「自动续订 Y 部」；cron 徽标加 tooltip，用自然语言说明当前表达式（后端 `core/crontext.py` 纯函数算，进单测；认不出的写法如实逐字段报，不编自然语言）；「自动建订阅」改为「自动续订已开启」。排序项 `Next Airing` 译为「按播出时间」。状态徽标 hover 显示 TMDB 原始英文状态。"
     }
+  },
+  "Prowlarr2MP": {
+    "name": "Prowlarr2MP",
+    "description": "将 Prowlarr 的索引器（公开 / 半公开 / 私有）桥接进 MoviePilot：手动加站后，用 Prowlarr 统一搜索并下载。改自 mitlearn/MoviePilot-PluginsV2 的 Prowlarr 索引器插件（v2.0.0）。",
+    "labels": "站点,prowlarr,search,rss",
+    "version": "1.0.2",
+    "icon": "Prowlarr2MP.png",
+    "author": "FlameSky-S",
+    "author_url": "https://github.com/FlameSky-S",
+    "level": 2,
+    "system_version": ">=3.0.0",
+    "release": true,
+    "history": {
+      "v1.0.2": "修复：构造 TorrentInfo 时传入其不存在的 imdbid 字段会抛 TypeError，导致所有原始结果被丢弃（搜索恒 0）；同步收紧测试 stub 以复现真实签名。",
+      "v1.0.1": "修复：V3 搜索链对插件资源源的全局调用不再用宿主 IndexerSites（整型站点 id）过滤插件字符串 id，解决搜索恒返回 0 的问题；同步/异步中文补搜路径同修。",
+      "v1.0.0": "首个版本：基于 mitlearn/MoviePilot-PluginsV2 的 Prowlarr 索引器（plugins.v3, v2.0.0）复刻改造。① 去掉公开站过滤，改为收录 public/semiPrivate/private 全部索引器；② 修复分类探测失败/无影视分类导致索引器被整条丢弃的问题（改为兜底 Torznab 2000/5000）；③ 站点采用手动加站方式（SitesHelper 注册 + 站点管理手动添加 domain），不写宿主站点库。"
+    }
   }
 }

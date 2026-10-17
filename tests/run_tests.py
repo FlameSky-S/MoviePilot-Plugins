@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""裸机单测：只覆盖 `plugins.v3/autorenew/core/` 下的纯逻辑。
+"""裸机单测入口：本进程覆盖 `plugins.v3/autorenew/core/` 的纯逻辑，另起子进程跑 `tests/prowlarr2mp/`。
 
 跑法：`python tests/run_tests.py`（不需要 pytest / MoviePilot 运行环境）
 失败会打印断言落差并以非 0 退出。
@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import traceback
 
@@ -973,6 +974,14 @@ def test_describe_cron_falls_back_honestly():
 
 # --------------------------------------------------------------------------
 
+def _run_prowlarr2mp() -> int:
+    """Prowlarr2MP 的桩测试要往 `sys.modules` 里塞假的 `app.*`，单独进程跑，别污染本进程。"""
+    script = os.path.join(ROOT, "tests", "prowlarr2mp", "run_tests.py")
+    print("\n== Prowlarr2MP ==")
+    sys.stdout.flush()  # 不 flush 的话父进程的缓冲输出会跑到子进程后面（重定向到文件时尤其明显）
+    return subprocess.call([sys.executable, script])
+
+
 def main() -> int:
     failed = []
     for fn in CASES:
@@ -987,6 +996,8 @@ def main() -> int:
     print(f"\n{total - len(failed)}/{total} passed")
     if failed:
         print("failed: " + ", ".join(failed))
+    other = _run_prowlarr2mp()
+    if failed or other:
         return 1
     return 0
 
