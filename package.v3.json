@@ -27,7 +27,7 @@
     "description": "将 Prowlarr 的索引器（公开 / 半公开 / 私有）桥接进 MoviePilot：手动加站后，用 Prowlarr 统一搜索并下载。改自 mitlearn/MoviePilot-PluginsV2 的 Prowlarr 索引器插件（v2.0.0）。",
     "labels": "站点,prowlarr,search,rss",
     "version": "1.0.2",
-    "icon": "Prowlarr2MP.png",
+    "icon": "https://raw.githubusercontent.com/FlameSky-S/MoviePilot-Plugins/main/icons/Prowlarr2MP.png",
     "author": "FlameSky-S",
     "author_url": "https://github.com/FlameSky-S",
     "level": 2,
